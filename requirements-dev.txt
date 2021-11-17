@@ -1,0 +1,4 @@
+jupyterlab
+torchsummary
+umap-learn[plot]
+wandb
