@@ -54,6 +54,30 @@ def train(config=None):
         return trainer, model, data_loader
 
 
+        # Vade
+        # dl = DataModule(dataset, batch_size=32)
+        #
+        # vade = VaDE(
+        #     alpha=100,
+        #     beta=1,
+        #     gamma=0,
+        #     triplet_loss_margin=1,
+        #     enc_out_dim=50,
+        #     latent_dim=20
+        # )
+        # wandb_logger = WandbLogger()
+        # wandb.watch(vade)
+        # vade.pre_train(dl, pre_epoch=50)
+        # trainer = pl.Trainer(
+        #     max_epochs=300,
+        #     logger=wandb_logger,
+        #     gpus=1,
+        #     # detect_anomaly=True,
+        #     # log_every_n_steps=1
+        # )
+        # trainer.fit(vade, dl)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
