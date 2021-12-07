@@ -16,6 +16,7 @@ class ClustersDataset(Dataset):
         mean=0,
         variance=2,
         side_information_type="pure",
+            min_max_scale = False
     ):
         self.num_of_clusters = num_of_clusters
         self.number_of_samples_in_cluster = number_of_samples_in_cluster
@@ -24,6 +25,7 @@ class ClustersDataset(Dataset):
         self.mean = mean
         self.variance = variance
         self.side_information_type = side_information_type
+        self.min_max_scale = min_max_scale
 
         self.X = None
         self.S = None
@@ -31,7 +33,7 @@ class ClustersDataset(Dataset):
 
     def setup(self):
 
-        self.X = torch.cat(
+        X = torch.cat(
             [
                 torch.cat(
                     (
@@ -59,6 +61,14 @@ class ClustersDataset(Dataset):
                 for i in range(self.num_of_clusters)
             ]
         )
+
+        if self.min_max_scale:
+        # MinMax scaling
+            for i in range(X.size(1)):
+                X[:,i] -= torch.min(X[:,i])
+                X[:,i] /= torch.max(X[:,i])
+
+        self.X = X
 
         self.Y = torch.cat(
             [
