@@ -16,7 +16,7 @@ class ClustersDataset(Dataset):
         mean=0,
         variance=2,
         side_information_type="pure",
-            min_max_scale = False
+        min_max_scale = False
     ):
         self.num_of_clusters = num_of_clusters
         self.number_of_samples_in_cluster = number_of_samples_in_cluster
