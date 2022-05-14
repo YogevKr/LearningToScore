@@ -1,493 +1,474 @@
-from typing import List, Union
-
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import pytorch_lightning as pl
+from torch import nn
+from torch.nn import functional as F
+import numpy as np
+from scipy.optimize import linear_sum_assignment as linear_assignment
+import matplotlib.pyplot as plt
+import wandb
 import umap
 import umap.plot
-from clusters_matching import match
-from pytorch_lightning import LightningModule
-from pytorch_lightning.metrics import functional as FM
-from torch.autograd import Function
-from torch.nn.modules.loss import _Loss
-
-import wandb
 
 
-class MutualInformationLoss(_Loss):
-    def __init__(self, size_average=True, reduce=True):
-        super(MutualInformationLoss, self).__init__(size_average)
-        self.reduce = reduce
+class CNNEncoder(nn.Module):
+    def __init__(
+        self,
+    ):
+        super(CNNEncoder, self).__init__()
 
-    def forward(self, input, target):
-        assert not target.requires_grad
-
-        return F.mse_loss(
-            input, target, size_average=self.size_average, reduce=self.reduce
+        self.cnn = nn.Sequential(
+            nn.Conv2d(
+                in_channels=1,
+                out_channels=32,
+                kernel_size=4,
+                stride=2,
+            ),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+            nn.Conv2d(
+                in_channels=32,
+                out_channels=64,
+                kernel_size=4,
+                stride=2,
+            ),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+            nn.Conv2d(
+                in_channels=64,
+                out_channels=128,
+                kernel_size=4,
+                stride=2,
+            ),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
         )
 
-
-class MultiTaskLoss(nn.Module):
-    """https://arxiv.org/abs/1705.07115"""
-
-    def __init__(self, is_regression, reduction="none"):
-        super(MultiTaskLoss, self).__init__()
-        self.is_regression = is_regression
-        self.n_tasks = len(is_regression)
-        self.log_vars = nn.Parameter(torch.zeros(self.n_tasks))
-        self.reduction = reduction
-
-    def forward(self, losses):
-        dtype = losses.dtype
-        device = losses.device
-        stds = (torch.exp(self.log_vars) ** (1 / 2)).to(device).to(dtype)
-        self.is_regression = self.is_regression.to(device).to(dtype)
-        coeffs = 1 / ((self.is_regression + 1) * (stds ** 2))
-        multi_task_losses = coeffs * losses + torch.log(stds)
-
-        if self.reduction == "sum":
-            multi_task_losses = multi_task_losses.sum()
-        if self.reduction == "mean":
-            multi_task_losses = multi_task_losses.mean()
-
-        return multi_task_losses
-
-
-class DiffArgMax(Function):
-    @staticmethod
-    def forward(ctx, input):
-        indices = torch.argmax(input, dim=1)
-        one_hot = F.one_hot(indices, num_classes=input.shape[1]).float()
-        ctx.save_for_backward(one_hot)
-        return one_hot * input
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        (one_hot,) = ctx.saved_tensors
-        return grad_output * one_hot
-
-
-class Net(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dims):
-        super(Net, self).__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.hidden_dim = hidden_dims
-        current_dim = input_dim
-        self.layers: Union[List, nn.ModuleList] = nn.ModuleList()
-        for h_dim in hidden_dims:
-            self.layers.append(nn.Linear(current_dim, h_dim))
-            current_dim = h_dim
-        self.layers.append(nn.Linear(current_dim, output_dim))
+        self.linear = nn.Sequential(
+            nn.Linear(128, 1024),
+            nn.ReLU(True),
+        )
 
     def forward(self, x):
-        for layer in self.layers[:-1]:
-            x = F.relu(layer(x))
-        return self.layers[-1](x)
+        x = self.cnn(x)
+        x = x.view(x.size(0), -1)
+        x_encoded = self.linear(x)
+        return x_encoded
 
 
-class Encoder(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dims):
-        super(Encoder, self).__init__()
-        self.encoder = Net(input_dim, output_dim, hidden_dims)
+class CNNDecoder(nn.Module):
+    def __init__(self, input_dim=20):
+        super(CNNDecoder, self).__init__()
+
+        a = 128
+        b = 2
+
+        self.decoder = nn.Sequential(
+            nn.Linear(input_dim + 10, a * b * b),
+            nn.Unflatten(1, (a, b, b)),
+            nn.ConvTranspose2d(
+                in_channels=128,
+                out_channels=64,
+                kernel_size=4,
+                stride=2,
+            ),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+            nn.ConvTranspose2d(
+                in_channels=64,
+                out_channels=32,
+                kernel_size=3,
+                stride=2,
+            ),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+            nn.ConvTranspose2d(
+                in_channels=32,
+                out_channels=1,
+                kernel_size=4,
+                stride=2,
+            ),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, z):
+        x_pro = self.decoder(z)
+        return x_pro
+
+
+class ToynetEncoder(nn.Module):
+    def __init__(
+        self,
+    ):
+        super(ToynetEncoder, self).__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Linear(784, 1024),
+            nn.ReLU(True),
+            nn.Linear(1024, 1024),
+            nn.ReLU(True),
+        )
 
     def forward(self, x):
-        return self.encoder(x)
+        x_encoded = self.encoder(x)
+        return x_encoded
 
 
-class Decoder(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dims):
-        super(Decoder, self).__init__()
-        self.decoder = Net(input_dim, output_dim, hidden_dims)
+class ToynetDecoder(nn.Module):
+    def __init__(self, input_dim=20):
+        super(ToynetDecoder, self).__init__()
 
-    def forward(self, x):
-        return self.decoder(x)
+        self.decoder = nn.Sequential(
+            nn.Linear(input_dim, 1024),
+            nn.ReLU(True),
+            nn.Linear(1024, 1024),
+            nn.ReLU(True),
+            nn.Linear(1024, 784),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, z):
+        x_pro = self.decoder(z)
+        return x_pro
+
+
+def cluster_acc(Y_pred, Y):
+    assert Y_pred.size == Y.size
+    D = int(max(Y_pred.max(), Y.max()) + 1)
+    w = np.zeros((D, D), dtype=np.int64)
+    for i in range(Y_pred.size):
+        w[Y_pred[i], int(Y[i])] += 1
+    ind = list(zip(*linear_assignment(w.max() - w)))
+    return sum([w[i, j] for i, j in ind]) * 1.0 / Y_pred.size, ind
 
 
 class Scorer(nn.Module):
     def __init__(
-        self, latent_dim, number_of_clusters, last_activation_function="softmax"
+        self,
+        latent_dim,
+        number_of_clusters,
     ):
         super(Scorer, self).__init__()
         self.latent_dim = latent_dim
         self.number_of_clusters = number_of_clusters
-        self.last_activation_function = last_activation_function
 
-        self.fc1 = nn.Linear(latent_dim, latent_dim)
-        self.fc2 = nn.Linear(latent_dim, number_of_clusters)
+        self.scorer = nn.Sequential(
+            nn.Linear(latent_dim, 500),
+            nn.ReLU(True),
+            nn.Linear(500, number_of_clusters),
+        )
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-
-        if self.last_activation_function == "softmax":
-            x = F.softmax(self.fc2(x), dim=1)
-        elif self.last_activation_function == "argmax":
-            x = DiffArgMax.apply(self.fc2(x))
-
+        x = self.scorer(x)
         return x
 
 
-class ScorerToSideInformation(nn.Module):
-    def __init__(self, number_of_clusters):
-        super(ScorerToSideInformation, self).__init__()
-        self.number_of_clusters = number_of_clusters
-        self.fc1 = nn.Linear(number_of_clusters, number_of_clusters)
-
-    def forward(self, x):
-        x = self.fc1(x)
-        return x
-
-
-class Model(LightningModule):
+class Model(pl.LightningModule):
     def __init__(
         self,
-        input_dim,
-        latent_dim,
-        encoder_hidden_dims,
-        triplet_loss_margin=1.0,
-        number_of_clusters=10,
-        alpha=1.0,
-        beta=1.0,
-        gamma=1.0,
-        scorer_last_activation_function="softmax",
-        triplet_loss_objective="latent_space",
-        uncertainty_loss=False,
+        encoder: nn.Module,
+        decoder: nn.Module,
+        enc_out_dim=1024,
+        latent_dim=2,
+        n_clusters=10,
+        alpha=1,
+        beta=1,
+        zeta=1,
+        eta=0.5,
+        delta=10,
     ):
         super().__init__()
+
         self.save_hyperparameters()
 
-        self.reconstruction_loss = nn.MSELoss()
-        self.triplet_loss_margin = triplet_loss_margin
-        self.triplet_loss = nn.TripletMarginLoss(margin=triplet_loss_margin, p=2)
-
-        self.side_information_loss = nn.CrossEntropyLoss()
-
-        self.encoder_hidden_dims = encoder_hidden_dims
-        self.decoder_hidden_dims = self.encoder_hidden_dims[::-1]
-
-        self.encoder = Encoder(input_dim, latent_dim, self.encoder_hidden_dims)
-        self.decoder = Decoder(latent_dim, input_dim, self.decoder_hidden_dims)
-
-        self.scorer = Scorer(
-            latent_dim=latent_dim,
-            number_of_clusters=number_of_clusters,
-            last_activation_function=scorer_last_activation_function,
-        )
-        self.score_to_side_information = ScorerToSideInformation(
-            number_of_clusters=number_of_clusters
-        )
-
+        self.enc_out_dim = enc_out_dim
+        self.latent_dim = latent_dim
+        self.n_clusters = n_clusters
         self.alpha = alpha
         self.beta = beta
-        self.gamma = gamma
+        self.zeta = zeta
+        self.eta = eta
+        self.delta = delta
 
-        self.number_of_clusters = number_of_clusters
+        self.encoder = encoder()
+        self.decoder = decoder(input_dim=latent_dim)
 
-        self.triplet_loss_objective = triplet_loss_objective
-        self.uncertainty_loss = uncertainty_loss
+        self.fc_mu_l = nn.Linear(enc_out_dim, latent_dim)
+        self.fc_log_sigma2_l = nn.Linear(enc_out_dim, latent_dim)
 
-        if self.uncertainty_loss:
-            self.is_regression = torch.Tensor([True, True, False])
-            self.multitaskloss_instance = MultiTaskLoss(
-                self.is_regression, reduction="mean"
-            )
-
-    def forward(self, x_a, x_p, x_n):
-        encoded_x_a = self.encoder(x_a)
-        encoded_x_p = self.encoder(x_p)
-        encoded_x_n = self.encoder(x_n)
-
-        reconstructed_x_a = self.decoder(encoded_x_a)
-        reconstructed_x_p = self.decoder(encoded_x_p)
-        reconstructed_x_n = self.decoder(encoded_x_n)
-
-        return (
-            encoded_x_a,
-            encoded_x_p,
-            encoded_x_n,
-            reconstructed_x_a,
-            reconstructed_x_p,
-            reconstructed_x_n,
-        )
-
-    def loss_function(
-        self,
-        x_a,
-        x_p,
-        x_n,
-        reconstructed_x_a,
-        reconstructed_x_p,
-        reconstructed_x_n,
-        encoded_x_a,
-        encoded_x_p,
-        encoded_x_n,
-        score_x_a,
-        score_x_p,
-        score_x_n,
-        side_information_a,
-        side_information_p,
-        side_information_n,
-        side_information_hat_a,
-        side_information_hat_p,
-        side_information_hat_n,
-    ):
-        reconstruction_loss_x_a = self.reconstruction_loss(x_a, reconstructed_x_a)
-        reconstruction_loss_x_p = self.reconstruction_loss(x_p, reconstructed_x_p)
-        reconstruction_loss_x_n = self.reconstruction_loss(x_n, reconstructed_x_n)
-
-        if self.triplet_loss_objective == "latent_space":
-            triplet_loss = self.triplet_loss(encoded_x_a, encoded_x_p, encoded_x_n)
-            print('self.triplet_loss_objective == "latent_space"')
-        elif self.triplet_loss_objective == "score":
-            triplet_loss = self.triplet_loss(score_x_a, score_x_p, score_x_n)
-            print('self.triplet_loss_objective == "score"')
-        else:
-            raise ValueError("triplet_loss_objective not in ['latent_space', 'score']")
-
-        side_information_loss_x_a = self.side_information_loss(
-            side_information_hat_a, torch.squeeze(side_information_a).long()
-        )
-        side_information_loss_x_p = self.side_information_loss(
-            side_information_hat_p, torch.squeeze(side_information_p).long()
-        )
-        side_information_loss_x_n = self.side_information_loss(
-            side_information_hat_n, torch.squeeze(side_information_n).long()
-        )
-
-        reconstruction_loss = (
-            reconstruction_loss_x_a + reconstruction_loss_x_p + reconstruction_loss_x_n
-        )
-        side_information_loss = (
-            side_information_loss_x_a
-            + side_information_loss_x_p
-            + side_information_loss_x_n
-        )
-
-        self.log("reconstruction_loss_x_a", reconstruction_loss_x_a, on_epoch=True)
-        self.log("reconstruction_loss_x_p", reconstruction_loss_x_p, on_epoch=True)
-        self.log("reconstruction_loss_x_n", reconstruction_loss_x_n, on_epoch=True)
-        self.log("triplet_loss", triplet_loss, on_epoch=True)
-        self.log("side_information_loss_x_a", side_information_loss_x_a, on_epoch=True)
-        self.log("side_information_loss_x_p", side_information_loss_x_p, on_epoch=True)
-        self.log("side_information_loss_x_n", side_information_loss_x_n, on_epoch=True)
-
-        if self.uncertainty_loss:
-            loss = self.multitaskloss_instance(
-                torch.stack((reconstruction_loss, triplet_loss, side_information_loss))
-            )
-        else:
-
-            loss = (
-                self.alpha * reconstruction_loss
-                + self.beta * triplet_loss
-                + self.gamma * side_information_loss
-            )
-
-        return loss
-
-    def get_score(self, x):
-        return self.scorer(x)
-
-    def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=1e-3)
+        self.scorer = Scorer(latent_dim, n_clusters)
 
     def on_train_start(self):
         self.hparams.update(self.trainer.datamodule.get_summery())
         self.logger.log_hyperparams(self.hparams)
 
-    def training_step(self, batch, batch_idx):
-        (
-            x_a,
-            x_p,
-            x_n,
-            side_information_a,
-            side_information_p,
-            side_information_n,
-            y_a,
-            y_p,
-            y_n,
-        ) = batch
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=1e-3)
 
-        (
-            encoded_x_a,
-            encoded_x_p,
-            encoded_x_n,
-            reconstructed_x_a,
-            reconstructed_x_p,
-            reconstructed_x_n,
-        ) = self(x_a, x_p, x_n)
+    @staticmethod
+    def sample(mu, log_sigma2):
+        std = torch.exp(log_sigma2 / 2)
+        z = torch.randn_like(mu) * std + mu
 
-        score_x_a = self.get_score(encoded_x_a)
-        score_x_p = self.get_score(encoded_x_p)
-        score_x_n = self.get_score(encoded_x_n)
+        return z
 
-        side_information_hat_a = self.score_to_side_information(score_x_a)
-        side_information_hat_p = self.score_to_side_information(score_x_p)
-        side_information_hat_n = self.score_to_side_information(score_x_n)
-        # side_information_hat_a, side_information_hat_p, side_information_hat_n = (
-        #     None,
-        #     None,
-        #     None,
-        # )
-
-        loss = self.loss_function(
-            x_a,
-            x_p,
-            x_n,
-            reconstructed_x_a,
-            reconstructed_x_p,
-            reconstructed_x_n,
-            encoded_x_a,
-            encoded_x_p,
-            encoded_x_n,
-            score_x_a,
-            score_x_p,
-            score_x_n,
-            side_information_a,
-            side_information_p,
-            side_information_n,
-            side_information_hat_a,
-            side_information_hat_p,
-            side_information_hat_n,
-        )
-        self.log("training_loss", loss, on_epoch=True)
-        return loss
-
-    def predict_step(self, batch, batch_idx, dataloader_idx=None):
-        (
-            x_a,
-            x_p,
-            x_n,
-            side_information_a,
-            side_information_p,
-            side_information_n,
-            y_a,
-            y_p,
-            y_n,
-        ) = batch
-
-        (
-            encoded_x_a,
-            encoded_x_p,
-            encoded_x_n,
-            reconstructed_x_a,
-            reconstructed_x_p,
-            reconstructed_x_n,
-        ) = self(x_a, x_p, x_n)
-
-        score_x_a = self.get_score(encoded_x_a)
-
-        return encoded_x_a, score_x_a
-
-    def validation_step(self, batch, batch_idx):
-        (
-            x_a,
-            x_p,
-            x_n,
-            side_information_a,
-            side_information_p,
-            side_information_n,
-            y_a,
-            y_p,
-            y_n,
-        ) = batch
-
-        (
-            encoded_x_a,
-            encoded_x_p,
-            encoded_x_n,
-            reconstructed_x_a,
-            reconstructed_x_p,
-            reconstructed_x_n,
-        ) = self(x_a, x_p, x_n)
-
-        score_x_a = self.get_score(encoded_x_a)
-        side_information_hat_a = self.score_to_side_information(score_x_a)
-
-        side_information_loss = self.side_information_loss(
-            side_information_hat_a, torch.squeeze(side_information_a).long()
+    @staticmethod
+    def vae_kl(mu, log_var):
+        return torch.mean(
+            -0.5 * torch.sum(1 + log_var - mu**2 - log_var.exp(), dim=1), dim=0
         )
 
-        y = y_a.squeeze().int()
-        pred = score_x_a.argmax(dim=1)
+    def forward(self, x, y=None):
 
-        acc = FM.accuracy(pred, y)
+        encoded_x = self.encoder(x)
 
-        _, _, new_pred = match(y.numpy(), pred.numpy())
-        aligned_acc = FM.accuracy(torch.tensor(new_pred), y)
+        mu, log_sigma2 = self.fc_mu_l(encoded_x), self.fc_log_sigma2_l(encoded_x)
 
-        metrics = {
-            "val_acc": acc,
-            "val_aligned_acc": aligned_acc,
-            "val_side_information_loss": side_information_loss,
-        }
-        self.log_dict(metrics, on_epoch=True)
+        z = self.sample(mu, log_sigma2)
 
-        return metrics, x_a, side_information_a, encoded_x_a, score_x_a, y_a
+        logit = self.scorer(z)
 
-    def validation_epoch_end(self, outputs):
-        metrics = []
-        x_as = []
-        side_information_as = []
-        encoded_x_as = []
-        score_x_as = []
-        y_as = []
-        for out in outputs:
-            metric, x_a, side_information_a, encoded_x_a, score_x_a, y_a = out
-            metrics.append(metric)
-            x_as.append(x_a)
-            side_information_as.append(side_information_a)
-            encoded_x_as.append(encoded_x_a)
-            score_x_as.append(score_x_a)
-            y_as.append(y_a)
+        reconstructed_x = self.decoder(torch.cat([z, logit], dim=1))
 
-        encoded_x_a = torch.cat(encoded_x_as)
-        score_x_a = torch.cat(score_x_as)
-        y_a = torch.cat(y_as).squeeze().int()
+        return (
+            encoded_x,
+            z,
+            reconstructed_x,
+            mu,
+            log_sigma2,
+            logit,
+        )
 
-        score = score_x_a.argmax(dim=1)
+    def loss_function(
+        self, x, y, reconstructed_x, encoded_x, z, mu, log_sigma2, logit, labeled_logit
+    ):
 
-        _, _, aligned_score = match(y_a.numpy(), score.numpy())
-        aligned_score = torch.tensor(aligned_score)
+        reconstruction_loss = self.alpha * F.binary_cross_entropy(reconstructed_x, x)
 
-        mapper = umap.UMAP().fit(encoded_x_a)
-        self.logger.experiment.log(
+        kl_loss = self.beta * self.vae_kl(mu, log_sigma2)
+
+        def conditinal_entropy(logit):
+            probs = F.softmax(logit, dim=1)
+            return -torch.mean(torch.sum(probs * (torch.log(probs + 1e-8)), 1))
+
+        score_given_z_entropy = conditinal_entropy(logit)
+
+        def score_entropy(logit):
+            probs = F.softmax(logit, dim=1)
+            score_probs = torch.mean(probs, 0)
+            return -torch.sum(score_probs * torch.log(score_probs))
+
+        score_entropy = score_entropy(logit)
+        mutual_info = self.zeta * (
+            self.eta * score_entropy - (1 - self.eta) * score_given_z_entropy
+        )
+
+        if labeled_logit is None and y is None:
+            cross_entropy_loss = 0
+        else:
+            cross_entropy_loss = self.delta * F.cross_entropy(labeled_logit, y)
+
+        loss = reconstruction_loss + kl_loss - mutual_info + cross_entropy_loss
+
+        self.log_dict(
             {
-                "Score distribution": wandb.Histogram(score),
-                "Aligned distribution": wandb.Histogram(aligned_score),
-                "U-map Y": wandb.Image(umap.plot.points(mapper, y_a)),
-                "U-map Y_hat": wandb.Image(
-                    umap.plot.points(mapper, torch.squeeze(score))
-                ),
-                "U-map aligned Y_hat": wandb.Image(
-                    umap.plot.points(mapper, torch.squeeze(aligned_score))
-                ),
+                "loss": loss,
+                "recon_loss": reconstruction_loss,
+                "kl_loss": kl_loss,
+                "mutual_info": mutual_info,
+                "score_entropy": score_entropy,
+                "score_given_z_entropy": score_given_z_entropy,
+                "cross_entropy": cross_entropy_loss,
             }
         )
 
-    def test_step(self, batch, batch_idx):
-        (
-            x_a,
-            x_p,
-            x_n,
-            side_information_a,
-            side_information_p,
-            side_information_n,
-        ) = batch
+        return loss
+
+    def training_step(self, batch, batch_idx):
+        unlabeled_data, labeled_data = batch
+
+        if unlabeled_data and labeled_data:
+            unlabeled_x, _ = unlabeled_data
+            labeled_x, labeled_y = labeled_data
+
+            (
+                unlabeled_encoded_x,
+                unlabeled_z,
+                unlabeled_reconstructed_x,
+                unlabeled_mu,
+                unlabeled_log_sigma2,
+                unlabeled_logit,
+            ) = self(unlabeled_x)
+
+            (
+                labeled_encoded_x,
+                labeled_z,
+                labeled_reconstructed_x,
+                labeled_mu,
+                labeled_log_sigma2,
+                labeled_logit,
+            ) = self(labeled_x)
+
+            x = torch.cat([unlabeled_x, labeled_x], 0)
+
+            reconstructed_x = torch.cat(
+                [unlabeled_reconstructed_x, labeled_reconstructed_x], 0
+            )
+
+            encoded_x = torch.cat([unlabeled_encoded_x, labeled_encoded_x], 0)
+
+            z = torch.cat([unlabeled_z, labeled_z], 0)
+
+            mu = torch.cat([unlabeled_mu, labeled_mu], 0)
+
+            log_sigma2 = torch.cat([unlabeled_log_sigma2, labeled_log_sigma2], 0)
+
+            logit = torch.cat([unlabeled_logit, labeled_logit], 0)
+
+            loss = self.loss_function(
+                x,
+                labeled_y,
+                reconstructed_x,
+                encoded_x,
+                z,
+                mu,
+                log_sigma2,
+                logit,
+                labeled_logit,
+            )
+        elif not unlabeled_data:
+            x, y = labeled_data
+
+            (
+                encoded_x,
+                z,
+                reconstructed_x,
+                mu,
+                log_sigma2,
+                logit,
+            ) = self(x)
+
+            loss = self.loss_function(
+                x, y, reconstructed_x, encoded_x, z, mu, log_sigma2, logit, logit
+            )
+        elif not labeled_data:
+            x, _ = unlabeled_data
+            (
+                encoded_x,
+                z,
+                reconstructed_x,
+                mu,
+                log_sigma2,
+                logit,
+            ) = self(x)
+
+            loss = self.loss_function(
+                x, None, reconstructed_x, encoded_x, z, mu, log_sigma2, logit, None
+            )
+
+        return loss
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=None):
+        x, y = batch
 
         (
-            encoded_x_a,
-            encoded_x_p,
-            encoded_x_n,
-            reconstructed_x_a,
-            reconstructed_x_p,
-            reconstructed_x_n,
-        ) = self(x_a, x_p, x_n)
+            encoded_x,
+            z,
+            reconstructed_x,
+            mu,
+            log_sigma2,
+            logit,
+        ) = self(x)
 
-        score_x_a = self.get_score(encoded_x_a)
+        return torch.argmax(logit, axis=1)
 
-        loss = self.side_information_loss(
-            score_x_a, torch.squeeze(side_information_a).long()
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+
+        (
+            encoded_x,
+            z,
+            reconstructed_x,
+            mu,
+            log_sigma2,
+            logit,
+        ) = self(x)
+
+        pred = self.predict_step(batch, batch_idx)
+
+        return mu, log_sigma2, pred, y, reconstructed_x
+
+    def validation_epoch_end(self, outputs):
+        mu_s = []
+        log_sigma2_s = []
+        preds = []
+        y_as = []
+        reconstructed_xs = []
+
+        for out in outputs:
+            mu, log_sigma2, pred, y_a, reconstructed_x = out
+            mu_s.append(mu)
+            log_sigma2_s.append(log_sigma2)
+            preds.append(pred)
+            y_as.append(y_a)
+            reconstructed_xs.append(reconstructed_x)
+
+        mu = torch.cat(mu_s).cpu().detach().numpy()
+        log_sigma2_x_a = torch.cat(log_sigma2_s).cpu().detach()
+        preds = torch.cat(preds).cpu().numpy()
+        y_a = torch.cat(y_as).cpu().numpy()
+        reconstructed_xs = torch.cat(reconstructed_xs).cpu().numpy()
+
+        def plot(mu_x_a, labels):
+            fig, ax = plt.subplots()
+            scatter = ax.scatter(
+                mu_x_a[:, 0], mu_x_a[:, 1], c=np.squeeze(labels), alpha=0.4
+            )
+            ax.legend(
+                *scatter.legend_elements(),
+            )
+            return fig
+
+        if self.latent_dim == 2:
+            q_z_x_true_plot = plot(mu, np.squeeze(y_a))
+            q_z_x_score_plot = plot(mu, np.squeeze(preds))
+        else:
+            mapper = umap.UMAP().fit(mu)
+            q_z_x_true_plot = umap.plot.points(mapper, labels=np.squeeze(y_a))
+            q_z_x_score_plot = umap.plot.points(mapper, labels=np.squeeze(preds))
+
+        def plot_mnist(images, labels):
+            num_row = 2
+            num_col = 5
+            fig, axes = plt.subplots(
+                num_row, num_col, figsize=(1.5 * num_col, 2 * num_row)
+            )
+            for i in range(10):
+                img = images[i]
+                if img.ndim == 3:
+                    img = img[0]
+                else:
+                    img = img.reshape((28, 28))
+
+                ax = axes[i // num_col, i % num_col]
+                ax.imshow(img, cmap="gray")
+                ax.set_title("Label: {}".format(labels[i]))
+            plt.tight_layout()
+            return plt
+
+        self.logger.experiment.log(
+            {
+                "preds": preds,
+                "mu": mu,
+                "log_sigma2 norm": torch.linalg.norm(log_sigma2_x_a, axis=1).mean(),
+                "y_a": y_a,
+            }
         )
 
-        self.log("test_loss", loss)
+        acc, ind = cluster_acc(preds, y_a)
+
+        self.logger.experiment.log(
+            {
+                "acc": acc,
+                "error-rate": (1 - acc) * 100,
+                "q(z|x) 2d": wandb.Image(q_z_x_true_plot),
+                "q(z|x) 2d score": wandb.Image(q_z_x_score_plot),
+                "reconstructed": plot_mnist(reconstructed_xs, y_a),
+            }
+        )
+
+
