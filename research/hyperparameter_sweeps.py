@@ -10,23 +10,30 @@ sweep_config = {
     }
 
 parameters_dict = {
-    'gamma': {
-        'values': [0,0.001,0.01,0.1,1,10,100]
-    }
+    'num_labeled': {
+        'values': [0, 100, 1000]
+    },
+    'alpha': {
+        'values': [0, 0.01, 1, 10, 100]
+    },
+    'beta': {
+        'values': [0, 0.0001, 0.001, 1]
+    },
+    'delta': {
+        'values': [1, 10, 100]
+    },
 }
-
-
 
 parameters_dict.update({
     'flatten': {'value': False},
     'labeled_percentage': {'value': None},
-    'num_labeled': {'value': 100},
+    # 'num_labeled': {'value': 100},
     'max_epochs': {'value': 100},
-    'alpha': {'value': 100},
+    # 'alpha': {'value': 100},
     'beta': {'value': 0},
     'zeta': {'value': 1},
     'eta': {'value': 0.5},
-    'delta': {'value': 1},
+    # 'delta': {'value': 1},
     'enc_out_dim': {'value': 1024},
     'latent_dim': {'value': 1024},
     }
