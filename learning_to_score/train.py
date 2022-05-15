@@ -1,8 +1,6 @@
-from learning_to_score.datasets import MNISTTrainDataset, get_mnist
-from learning_to_score.model import CNNDecoder, CNNEncoder
+from datasets import MNISTTrainDataset, get_mnist, DataModule
+from model import CNNDecoder, CNNEncoder, Model
 import pytorch_lightning as pl
-from datasets import ClustersDataset, DataModule
-from model import Model
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities import argparse
 
@@ -17,7 +15,6 @@ def train(config=None):
 
 
         unlabeled_dataset, labeled_dataset = MNISTTrainDataset(
-            labeled_percentage=config.labeled_percentage
             num_labeled=config.num_labeled,
             flatten=config.flatten,
         ).get_datasets()
@@ -65,7 +62,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--flatten", type=bool)
-    parser.add_argument("--labeled_percentage", type=float)
     parser.add_argument("--num_labeled", type=int)
     parser.add_argument("--max_epochs", type=int)
     parser.add_argument("--alpha", type=float)
