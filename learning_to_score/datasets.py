@@ -1,11 +1,21 @@
-from itertools import zip_longest
-import torch
-from torchvision.datasets import MNIST
-from torchvision import transforms
-import torchvision.transforms as T
-from torch.utils.data import DataLoader, Dataset
 from typing import Dict
+
+import numpy as np
+import psutil
+import torch
+from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms
+from torchvision.datasets import CIFAR10, KMNIST, MNIST, SVHN, USPS
 import pytorch_lightning as pl
+
+datasets_dict = {
+    "MNIST": MNIST,
+    "SVHN": SVHN,
+    "USPS": USPS,
+    "KMNIST": KMNIST,
+    "CIFAR10": CIFAR10,
+}
+
 
 class Normalize(object):
     """Convert ndarrays in sample to Tensors."""
@@ -17,119 +27,223 @@ class Normalize(object):
         return sample - min / (max - min)
 
 
-class MNISTTrainDataset:
+class TripletsDataset(Dataset):
     def __init__(
         self,
-        data_dir=".",
-        labeled_percentage=0.1,
-        num_labeled=None,
+        dataset_obj,
+        data_dir="./data/",
         flatten=False,
+        train=True,
+        side_inforamtion_type="pure",
     ):
 
         self.data_dir = data_dir
-        self.labeled_percentage = labeled_percentage
-        self.num_labeled = num_labeled
+        self.dataset = None
         self.flatten = flatten
-
-        self.labeled_dataset = None
-        self.unlabeled_dataset = None
-
-        self.labeled_size = None
-        self.unlabeled_size = None
+        self.train = train
+        self.side_inforamtion_type = side_inforamtion_type
+        self.dataset_obj = dataset_obj
 
     def setup(self):
-        transformers = [transforms.ToTensor(), Normalize()]
+        transformers = [transforms.ToTensor()]
 
-        if self.flatten:
-            transformers.append(T.Lambda(lambda x: torch.flatten(x)))
+        if self.dataset_obj is MNIST or self.dataset_obj is KMNIST:
 
-        full_train_dataset = MNIST(
-            root=self.data_dir,
-            train=True,
-            download=True,
-            transform=transforms.Compose(transformers),
-        )
+            transformers.append(Normalize())
+            if self.flatten:
+                transformers.append(transforms.Lambda(lambda x: torch.flatten(x)))
 
-        if self.num_labeled is not None:
-            label_size = self.num_labeled
+            self.dataset = self.dataset_obj(
+                root=self.data_dir,
+                train=self.train,
+                download=True,
+                transform=transforms.Compose(transformers),
+            )
+        elif self.dataset_obj is SVHN:
+            t = "train" if self.train else "test"
+            transformers.extend([transforms.Grayscale(), transforms.Resize((28, 28))])
+
+            if self.flatten:
+                transformers.append(transforms.Lambda(lambda x: torch.flatten(x)))
+
+            self.dataset = self.dataset_obj(
+                root=self.data_dir,
+                split=t,
+                download=True,
+                transform=transforms.Compose(transformers),
+            )
+        elif self.dataset_obj is USPS:
+            if self.flatten:
+                transformers.append(transforms.Lambda(lambda x: torch.flatten(x)))
+
+            self.dataset = self.dataset_obj(
+                root=self.data_dir,
+                train=self.train,
+                download=True,
+                transform=transforms.Compose(transformers),
+            )
+        elif self.dataset_obj is CIFAR10:
+
+            transformers.extend([transforms.Grayscale(), transforms.Resize((28, 28))])
+            if self.flatten:
+                transformers.append(transforms.Lambda(lambda x: torch.flatten(x)))
+                
+            self.dataset = self.dataset_obj(
+                root=self.data_dir,
+                train=self.train,
+                download=True,
+                transform=transforms.Compose(transformers),
+            )
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def _get_side_information(self, y_a, y_p=None, y_n=None):
+        if self.side_inforamtion_type == "pure":
+            if self.train:
+                return (y_a, y_p, y_n)
+            else:
+                return y_a
+        elif self.side_inforamtion_type == "mod_2":
+            if self.train:
+                return (y_a // 2, y_p // 2, y_n // 2)
+            else:
+                return y_a // 2
+        elif self.side_inforamtion_type == "unbalanced":
+            mapping_dict = {
+                0: 0,
+                1: 0,
+                2: 0,
+                3: 0,
+                4: 1,
+                5: 1,
+                6: 1,
+                7: 2,
+                8: 2,
+                9: 3,
+            }
+
+            if self.train:
+                return (
+                    mapping_dict[y_a],
+                    mapping_dict[y_p],
+                    mapping_dict[y_n],
+                )
+            else:
+                return mapping_dict[y_a]
+
+    def __getitem__(self, idx):
+
+        if self.train:
+
+            idx_p = np.random.randint(self.__len__())
+            while self.dataset[idx_p][1] != self.dataset[idx][1]:
+                idx_p = np.random.randint(self.__len__())
+
+            idx_n = np.random.randint(self.__len__())
+            while self.dataset[idx_n][1] == self.dataset[idx][1]:
+                idx_n = np.random.randint(self.__len__())
+
+            x_a, y_a = self.dataset[idx]
+            x_p, y_p = self.dataset[idx_p]
+            x_n, y_n = self.dataset[idx_n]
+
+            (
+                side_information_a,
+                side_information_p,
+                side_information_n,
+            ) = self._get_side_information(y_a, y_p, y_n)
+
+            return (
+                x_a,
+                x_p,
+                x_n,
+                side_information_a,
+                side_information_p,
+                side_information_n,
+                y_a,
+                y_p,
+                y_n,
+            )
         else:
-            label_size = int(len(full_train_dataset) * self.labeled_percentage)
+            x_a, y_a = self.dataset[idx]
+            side_information_a = self._get_side_information(y_a)
 
-        self.labeled_dataset, self.unlabeled_dataset = torch.utils.data.random_split(
-            full_train_dataset, [label_size, len(full_train_dataset) - label_size]
+            return (
+                x_a,
+                side_information_a,
+                y_a,
+            )
+
+    def get_summery(self) -> Dict:
+        return dict(
+            dataset_type=type(self).__name__,
         )
-
-        self.labeled_size = len(self.labeled_dataset)
-        self.unlabeled_size = len(self.unlabeled_dataset)
-
-    def get_datasets(self):
-        self.setup()
-        return self.unlabeled_dataset, self.labeled_dataset
-
-
-def get_mnist(data_dir=".", train=True, flatten=False):
-    transformers = [transforms.ToTensor(), Normalize()]
-
-    if flatten:
-        transformers.append(T.Lambda(lambda x: torch.flatten(x)))
-
-    return MNIST(
-        root=data_dir,
-        train=train,
-        download=True,
-        transform=transforms.Compose(transformers),
-    )
 
 
 class DataModule(pl.LightningDataModule):
     def __init__(
         self,
-        unlabeled_train_dataset: Dataset,
-        labeled_train_dataset: Dataset,
+        train_dataset: Dataset,
         test_dataset: Dataset,
-        batch_size=100,
+        batch_size: int = 128,
+        num_workers=2,
     ):
         super().__init__()
-        self.unlabeled_train_dataset = unlabeled_train_dataset
-        self.labeled_train_dataset = labeled_train_dataset
+        self.train_dataset = train_dataset
         self.test_dataset = test_dataset
         self.batch_size = batch_size
+        self.num_workers = num_workers
 
     def train_dataloader(self):
-
-        if len(self.unlabeled_train_dataset) == 0:
-            return zip_longest(
-                [],
-                DataLoader(
-                    self.labeled_train_dataset, shuffle=True, batch_size=self.batch_size
-                ),
-            )
-        elif len(self.labeled_train_dataset) == 0:
-            return zip_longest(
-                DataLoader(
-                    self.unlabeled_train_dataset,
-                    shuffle=True,
-                    batch_size=self.batch_size,
-                ),
-                [],
-            )
-        else:
-            return zip_longest(
-                DataLoader(
-                    self.unlabeled_train_dataset,
-                    shuffle=True,
-                    batch_size=self.batch_size,
-                ),
-                DataLoader(
-                    self.labeled_train_dataset, shuffle=True, batch_size=self.batch_size
-                ),
-            )
+        return DataLoader(
+            self.train_dataset,
+            shuffle=True,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=800)
+        return DataLoader(
+            self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers
+        )
 
     def val_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=800)
+        return DataLoader(
+            self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers
+        )
 
     def get_summery(self) -> Dict:
-        return {}
+        return self.train_dataset.get_summery()
+
+
+def get_triplet_dataset(
+    dataset_obj,
+    data_dir="./data/",
+    batch_size=128,
+    side_inforamtion_type=None,
+    flatten=False,
+):
+    triplets_dataset_train = TripletsDataset(
+        dataset_obj,
+        data_dir=data_dir,
+        side_inforamtion_type=side_inforamtion_type,
+        flatten=flatten,
+    )
+    triplets_dataset_train.setup()
+
+    triplets_dataset_test = TripletsDataset(
+        dataset_obj,
+        data_dir=data_dir,
+        train=False,
+        side_inforamtion_type=side_inforamtion_type,
+        flatten=flatten,
+    )
+    triplets_dataset_test.setup()
+
+    return DataModule(
+        train_dataset=triplets_dataset_train,
+        test_dataset=triplets_dataset_test,
+        batch_size=batch_size,
+        num_workers=psutil.cpu_count(),
+    )
