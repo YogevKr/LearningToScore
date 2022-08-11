@@ -68,7 +68,7 @@ class CNNDecoder(nn.Module):
         b = 2
 
         self.decoder = nn.Sequential(
-            nn.Linear(input_dim + 10, a * b * b),
+            nn.Linear(input_dim, a * b * b),
             nn.Unflatten(1, (a, b, b)),
             nn.ConvTranspose2d(
                 in_channels=128,
@@ -122,11 +122,11 @@ class VannilaDecoder(nn.Module):
 
         self.decoder = nn.Sequential(
             nn.Linear(input_dim, 20),
-            nn.ReLU(),
+            nn.ReLU(True),
             nn.Linear(20, 1024),
-            nn.ReLU(),
+            nn.ReLU(True),
             nn.Linear(1024, 1024),
-            nn.ReLU(),
+            nn.ReLU(True),
             nn.Linear(1024, 784),
             nn.Sigmoid(),
         )
@@ -383,10 +383,6 @@ class Model(pl.LightningModule):
             z_p = self.sample(mu_x_p, log_sigma2_x_p)
             z_n = self.sample(mu_x_n, log_sigma2_x_n)
 
-            logit_a = self.scorer(z_a)
-            logit_p = self.scorer(z_p)
-            logit_n = self.scorer(z_n)
-
             # decoded
             reconstructed_x_a = self.decoder(z_a)
             reconstructed_x_p = self.decoder(z_p)
@@ -395,6 +391,10 @@ class Model(pl.LightningModule):
             side_information_logit_a = self.side_information(z_a)
             side_information_logit_p = self.side_information(z_p)
             side_information_logit_n = self.side_information(z_n)
+
+            logit_a = self.scorer(z_a)
+            logit_p = self.scorer(z_p)
+            logit_n = self.scorer(z_n)
 
             return (
                 encoded_x_a,
@@ -431,7 +431,7 @@ class Model(pl.LightningModule):
             logit_a = self.scorer(z_a)
 
             # decoded
-            reconstructed_x_a = self.decoder(torch.cat([z_a, logit_a], dim=1))
+            reconstructed_x_a = self.decoder(z_a)
 
             side_information_logit_a = self.side_information(z_a)
 

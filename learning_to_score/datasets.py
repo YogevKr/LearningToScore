@@ -8,12 +8,150 @@ from torchvision import transforms
 from torchvision.datasets import CIFAR10, KMNIST, MNIST, SVHN, USPS
 import pytorch_lightning as pl
 
+import os
+import pandas as pd
+from torchvision.io import read_image
+import glob
+from PIL import Image
+from PIL import ImageFile
+from torchvision.datasets import VisionDataset
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
+class ParkinsonsDrawingsDataset(VisionDataset):
+
+    classes = [
+        "0 - healthy",
+        "1 - parkinson",
+    ]
+
+
+
+    def __init__(
+        self, 
+        root: str,
+        train: bool = True,
+        transform: Optional[Callable] = None,
+        target_transform: Optional[Callable] = None,
+        download: bool = False,
+        data_type=None
+    ):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+
+        self.img_dir = root
+        self.train = train
+        self.transform = transform
+        self.target_transform = target_transform
+        self.data_type = data_type
+
+        self.data, self.targets = self._load_data()
+
+    def _load_data(self):
+        
+        image_dir = os.path.join(
+            self.root,
+            self.data_type,
+            "training" if self.train else "testing"
+        )
+
+        healthy_file_list = glob.glob(
+            os.path.join(
+                image_dir,
+                "healthy",
+                "*.png"
+            )
+        )
+
+        healthy_data = [
+            Image.open(fname).convert("RGB")
+            for fname in healthy_file_list
+        ]
+
+
+        healthy_labels = [0] * len(healthy_data)
+
+        parkinson_file_list = glob.glob(
+            os.path.join(
+                image_dir,
+                "parkinson",
+                "*.png"
+            )
+        )
+
+        parkinson_data = [
+            Image.open(fname).convert("RGB")
+            for fname in parkinson_file_list
+        ]
+
+        parkinson_labels = [1] * len(parkinson_data)
+        
+        data = healthy_data + parkinson_data
+        targets = healthy_labels + parkinson_labels
+
+        return data, targets
+
+    def __len__(self):
+        return len(self.targets)
+
+    def __getitem__(self, idx):
+        image = self.data[idx]
+        label = self.targets[idx]
+        if self.transform:
+            image = self.transform(image)
+        if self.target_transform:
+            label = self.target_transform(label)
+        return image, label
+
+class SpiralParkinsonsDrawingsDataset(ParkinsonsDrawingsDataset):
+    
+    def __init__(
+        self, 
+        root: str,
+        train: bool = True,
+        transform: Optional[Callable] = None,
+        target_transform: Optional[Callable] = None,
+        download: bool = False,
+    ):
+        super().__init__(
+            root=root, 
+            train=train,
+            transform=transform, 
+            target_transform=target_transform,
+            download=download,
+            data_type="spiral"
+        )
+
+class WaveParkinsonsDrawingsDataset(ParkinsonsDrawingsDataset):
+    
+    def __init__(
+        self, 
+        root: str,
+        train: bool = True,
+        transform: Optional[Callable] = None,
+        target_transform: Optional[Callable] = None,
+        download: bool = False,
+    ):
+        super().__init__(
+            root=root, 
+            train=train,
+            transform=transform, 
+            target_transform=target_transform,
+            download=download,
+            data_type="wave"
+        )
+
+
 datasets_dict = {
     "MNIST": MNIST,
     "SVHN": SVHN,
     "USPS": USPS,
     "KMNIST": KMNIST,
     "CIFAR10": CIFAR10,
+    "WaveParkinsonsDrawingsDataset": WaveParkinsonsDrawingsDataset,
+    "SpiralParkinsonsDrawingsDataset": SpiralParkinsonsDrawingsDataset
 }
 
 
@@ -83,6 +221,18 @@ class TripletsDataset(Dataset):
                 transform=transforms.Compose(transformers),
             )
         elif self.dataset_obj is CIFAR10:
+
+            transformers.extend([transforms.Grayscale(), transforms.Resize((28, 28))])
+            if self.flatten:
+                transformers.append(transforms.Lambda(lambda x: torch.flatten(x)))
+                
+            self.dataset = self.dataset_obj(
+                root=self.data_dir,
+                train=self.train,
+                download=True,
+                transform=transforms.Compose(transformers),
+            )
+        elif self.dataset_obj is WaveParkinsonsDrawingsDataset or self.dataset_obj is SpiralParkinsonsDrawingsDataset:
 
             transformers.extend([transforms.Grayscale(), transforms.Resize((28, 28))])
             if self.flatten:
