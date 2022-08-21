@@ -8,7 +8,11 @@ import wandb
 
 
 def train(config=None):
-    with wandb.init(config=config):
+    with wandb.init(
+        config=config, 
+        project="learning2score", 
+        save_code=True,
+    ):
         config = wandb.config
         pl.seed_everything(1234)
         

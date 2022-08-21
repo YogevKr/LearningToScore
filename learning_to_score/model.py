@@ -97,6 +97,118 @@ class CNNDecoder(nn.Module):
         x_pro = self.decoder(z)
         return x_pro
 
+class ParkinsonCNNEncoder(nn.Module):
+    def __init__(
+        self,
+    ):
+        super(ParkinsonCNNEncoder, self).__init__()
+
+        self.cnn = nn.Sequential(
+            nn.Conv2d(
+                in_channels=1,
+                out_channels=32,
+                kernel_size=4,
+                stride=2,
+            ),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+            nn.MaxPool2d(kernel_size=2),
+            nn.Conv2d(
+                in_channels=32,
+                out_channels=32,
+                kernel_size=4,
+                stride=2,
+            ),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+            nn.MaxPool2d(kernel_size=2),
+        )
+
+        self.linear = nn.Sequential(
+            nn.Linear(1568, 128),
+            nn.ReLU(True),
+        )
+
+    def forward(self, x):
+        x = self.cnn(x)
+        x = x.view(x.size(0), -1)
+        x_encoded = self.linear(x)
+        return x_encoded
+
+
+class ParkinsonCNNDecoder(nn.Module):
+    def __init__(self, input_dim=20):
+        super(ParkinsonCNNDecoder, self).__init__()
+
+        a = 32
+        b = 7
+
+        self.decoder = nn.Sequential(
+            nn.Linear(input_dim, a * b * b),
+            nn.Unflatten(1, (a, b, b)),
+            nn.ConvTranspose2d(
+                in_channels=32,
+                out_channels=32,
+                kernel_size=3,
+                stride=2,
+            ),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.ConvTranspose2d(
+                in_channels=32,
+                out_channels=32,
+                kernel_size=4,
+                stride=2,
+            ),
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.ConvTranspose2d(
+                in_channels=32,
+                out_channels=1,
+                kernel_size=5,
+            ),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, z):
+        x_pro = self.decoder(z)
+        return x_pro
+
+class VoiceEncoder(nn.Module):
+    def __init__(
+        self,
+    ):
+        super(Encoder, self).__init__()
+
+        self.encoder = nn.Sequential(
+            nn.Linear(16, 10),
+            nn.ReLU(),
+            nn.Linear(10, 20),
+            nn.ReLU(),
+            nn.Linear(20, 10),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        x_encoded = self.encoder(x)
+        return x_encoded
+
+
+class VoiceDecoder(nn.Module):
+    def __init__(self, input_dim=20):
+        super(Decoder, self).__init__()
+
+        self.decoder = nn.Sequential(
+            nn.Linear(input_dim, 20),
+            nn.ReLU(),
+            nn.Linear(20, 10),
+            nn.ReLU(),
+            nn.Linear(10, 16),
+        )
+
+    def forward(self, z):
+        x_pro = self.decoder(z)
+
+        return x_pro
+
 class VannilaEncoder(nn.Module):
     def __init__(
         self,
@@ -505,15 +617,27 @@ class Model(pl.LightningModule):
 
         triplet_loss_ = self.gamma * triplet_loss
 
-        side_information_loss_a = F.cross_entropy(
-            side_information_logit_a, side_information_a
-        ).div(math.log(2))
-        side_information_loss_p = F.cross_entropy(
-            side_information_logit_p, side_information_p
-        ).div(math.log(2))
-        side_information_loss_n = F.cross_entropy(
-            side_information_logit_n, side_information_n
-        ).div(math.log(2))
+        if self.side_info_dim == 1:
+            side_information_loss_a = F.binary_cross_entropy_with_logits(
+                side_information_logit_a.flatten(), side_information_a.float()
+            )
+            side_information_loss_p = F.binary_cross_entropy_with_logits(
+                side_information_logit_p.flatten(), side_information_p.float()
+            )
+            side_information_loss_n = F.binary_cross_entropy_with_logits(
+                side_information_logit_n.flatten(), side_information_n.float()
+            )
+
+        else:
+            side_information_loss_a = F.cross_entropy(
+                side_information_logit_a, side_information_a
+            ).div(math.log(2))
+            side_information_loss_p = F.cross_entropy(
+                side_information_logit_p, side_information_p
+            ).div(math.log(2))
+            side_information_loss_n = F.cross_entropy(
+                side_information_logit_n, side_information_n
+            ).div(math.log(2))
 
         side_information_loss = self.delta * (
             side_information_loss_a + side_information_loss_p + side_information_loss_n
@@ -668,7 +792,10 @@ class Model(pl.LightningModule):
             side_information_logit_a,
         ) = self(x_a, None, None)
 
-        pred = torch.argmax(logit_a, axis=1)
+        if self.n_clusters == 1:
+           pred = logit_a
+        else: 
+            pred = torch.argmax(logit_a, axis=1)
 
         return pred
 
@@ -755,6 +882,9 @@ class Model(pl.LightningModule):
                 elif img.size == 256:
                     img = img.reshape((16, 16))
                     cmap = "gray"
+                elif img.size == 16384:
+                    img = img.reshape((128, 128))
+                    cmap = "gray"
 
                 ax = axes[i // num_col, i % num_col]
                 if cmap == "gray":
@@ -774,6 +904,9 @@ class Model(pl.LightningModule):
             )
             return fig
 
+        if self.n_clusters == 1:
+            preds = (preds.flatten() > 0.5).astype(int)
+
         self.logger.experiment.log(
             {
                 "preds": preds,
@@ -789,47 +922,33 @@ class Model(pl.LightningModule):
         pprint(prediction_idx_mapping)
 
         # side_info accuracy by first
-        side_info_max_acc, _ = cluster_acc(
+        side_info_acc, _ = cluster_acc(
             side_information_logit.argmax(axis=1).detach().cpu().numpy(),
             side_information.detach().cpu().numpy(),
         )
 
-        # side_info accuracy by second
-        def get_second_max(t: torch.Tensor):
-            _, ind = t.topk(2)
-            return ind[:, 1]
-
-        side_info_second_max_acc, _ = cluster_acc(
-            get_second_max(side_information_logit).detach().cpu().numpy(),
-            side_information.detach().cpu().numpy(),
-        )
-
-        # accuracy by first 5
-        side_info_first_5_max_acc = 0
-        if side_information_logit.shape[1] > 5:
-            side_info_first_5_max_acc, _ = cluster_acc(
-                side_information_logit[:, :5].argmax(axis=1).detach().cpu().numpy(),
-                side_information.detach().cpu().numpy(),
-            )
 
         self.logger.experiment.log(
             {
                 "acc": acc,
-                "side_info_max_acc": side_info_max_acc,
-                "side_info_second_max_acc": side_info_second_max_acc,
-                "side_info_first_5_max_acc": side_info_first_5_max_acc,
+                "side_info_max_acc": side_info_acc,
                 "error-rate": (1 - acc) * 100,
                 "q(z|x) 2d": plot(mu[:, 0], mu[:, 1], np.squeeze(y_a)),
                 "q(z|x) 2d score": plot(mu[:, 0], mu[:, 1], np.squeeze(preds)),
                 "conf_mat": wandb.plot.confusion_matrix(
                     probs=None,
                     y_true=y_a,
-                    preds=[prediction_idx_mapping.get(i, i + 10) for i in preds],
-                    class_names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                    preds=[prediction_idx_mapping[i] for i in preds],
+                    class_names=list(range(self.n_clusters + 1)),
                 ),
+                # "conf_mat": wandb.plot.confusion_matrix(
+                #     probs=None,
+                #     y_true=y_a,
+                #     preds=[prediction_idx_mapping[i] for i in preds],
+                # ),
                 "results plot": plot(
                     side_information_logit.argmax(axis=1).detach().cpu().numpy(),
-                    [prediction_idx_mapping.get(i, i + 10) for i in preds],
+                    [prediction_idx_mapping[i] for i in preds],
                     c=y_a,
                 ),
                 "reconstructed": plot_sample(reconstructed_xs, y_a),
