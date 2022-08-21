@@ -135,3 +135,4 @@ wandb
 ml-runs
 mlruns
 tb_logs
+.DS_Store
