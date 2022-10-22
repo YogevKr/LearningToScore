@@ -1,6 +1,6 @@
 import glob
 import os
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -8,11 +8,12 @@ import psutil
 import pytorch_lightning as pl
 import torch
 from PIL import Image, ImageFile
+from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import DataLoader, Dataset
+from learning_to_score.datasets.parkinson_voice import ParkinsonVoiceDataset
 from torchvision import transforms
 from torchvision.datasets import (CIFAR10, KMNIST, MNIST, SVHN, USPS,
                                   VisionDataset)
-from sklearn.preprocessing import MinMaxScaler
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -118,97 +119,6 @@ class WaveParkinsonsDrawingsDataset(ParkinsonsDrawingsDataset):
             data_type="wave",
         )
 
-
-class ParkinsonsVoiceDataset(Dataset):
-
-    def __init__(
-        self,
-        root: str,
-        train: bool = True,
-        transform: Optional[Callable] = None,
-        target_transform: Optional[Callable] = None,
-        download: bool = False,
-    ):
-        super().__init__()
-        
-        
-        self.root = root
-        self.train = train
-        self.transform = transform
-        self.target_transform = target_transform
-        self.filename = "parkinsons_updrs.csv"
-
-        if download:
-            self.download()
-
-        if not self._check_exists():
-            raise RuntimeError("Dataset not found. You can use download=True to download it")
-
-        self.data, self.targets = self._load_data()
-
-    def download(self):
-        url = "https://archive.ics.uci.edu/ml/machine-learning-databases/parkinsons/telemonitoring/parkinsons_updrs.data"
-
-        if not os.path.exists(self.raw_folder):
-            os.makedirs(self.raw_folder)
-        
-        df = pd.read_csv(url)
-        df.to_csv(os.path.join(self.raw_folder, self.filename))
-
-    def _check_exists(self) -> bool:
-        return os.path.isfile(os.path.join(self.raw_folder, self.filename))
-
-    @property
-    def raw_folder(self) -> str:
-        return os.path.join(self.root, self.__class__.__name__, "raw")
-
-    def _load_data(self):
-
-        test_users_ids = [3, 6, 15, 17, 24, 26, 28, 30, 32, 41]
-
-        df_ = pd.read_csv(os.path.join(self.raw_folder, self.filename))
-
-        df_train = df_.loc[~df_["subject#"].isin(test_users_ids)]
-        len(set(df_train["subject#"].unique()).intersection(set(test_users_ids))) == 0
-
-        df_test = df_.loc[df_["subject#"].isin(test_users_ids)]
-        len(set(df_test["subject#"].unique()).intersection(set(test_users_ids))) == len(test_users_ids)
-
-        feature_columns = ['Jitter(%)', 'Jitter(Abs)', 'Jitter:RAP', 'Jitter:PPQ5', 'Jitter:DDP',
-       'Shimmer', 'Shimmer(dB)', 'Shimmer:APQ3', 'Shimmer:APQ5',
-       'Shimmer:APQ11', 'Shimmer:DDA', 'NHR', 'HNR', 'RPDE', 'DFA', 'PPE']
-
-        target_column = "total_UPDRS"
-
-        train_X = df_train[feature_columns].values
-        min_max_scaler = self.fit_min_max_scaler(train_X)
-
-        df = df_train if self.train else df_test
-
-        data = min_max_scaler.transform(
-            df[feature_columns].values
-        )
-        targets = df[target_column].values
-
-        return data, targets
-
-    @staticmethod
-    def fit_min_max_scaler(train_X):
-        scaler = MinMaxScaler()
-        scaler.fit(train_X)
-
-        return scaler
-
-
-    def __len__(self):
-        return len(self.targets)
-
-    def __getitem__(self, idx):
-        instance = self.data[idx]
-        label = self.targets[idx]
-        return instance, label
-
-
 datasets_dict = {
     "MNIST": MNIST,
     "SVHN": SVHN,
@@ -217,7 +127,7 @@ datasets_dict = {
     "CIFAR10": CIFAR10,
     "WaveParkinsonsDrawingsDataset": WaveParkinsonsDrawingsDataset,
     "SpiralParkinsonsDrawingsDataset": SpiralParkinsonsDrawingsDataset,
-    "ParkinsonsVoiceDataset": ParkinsonsVoiceDataset
+    "ParkinsonsVoiceDataset": ParkinsonVoiceDataset
 }
 
 
@@ -238,14 +148,14 @@ class TripletsDataset(Dataset):
         data_dir="./data/",
         flatten=False,
         train=True,
-        side_inforamtion_type="pure",
+        side_information_type="pure",
     ):
 
         self.data_dir = data_dir
         self.dataset = None
         self.flatten = flatten
         self.train = train
-        self.side_inforamtion_type = side_inforamtion_type
+        self.side_information_type = side_information_type
         self.dataset_obj = dataset_obj
 
     def setup(self):
@@ -313,10 +223,8 @@ class TripletsDataset(Dataset):
                 download=True,
                 transform=transforms.Compose(transformers),
             )
-        elif (
-            self.dataset_obj is ParkinsonsVoiceDataset
-        ):
-                    
+        elif self.dataset_obj is ParkinsonVoiceDataset:
+
             self.dataset = self.dataset_obj(
                 root=self.data_dir,
                 train=self.train,
@@ -324,23 +232,22 @@ class TripletsDataset(Dataset):
             )
         else:
             raise TypeError
-        
 
     def __len__(self):
         return len(self.dataset)
 
     def _get_side_information(self, y_a, y_p=None, y_n=None):
-        if self.side_inforamtion_type == "pure":
+        if self.side_information_type == "pure":
             if self.train:
                 return (y_a, y_p, y_n)
             else:
                 return y_a
-        elif self.side_inforamtion_type == "mod_2":
+        elif self.side_information_type == "mod_2":
             if self.train:
                 return (y_a // 2, y_p // 2, y_n // 2)
             else:
                 return y_a // 2
-        elif self.side_inforamtion_type == "unbalanced":
+        elif self.side_information_type == "unbalanced":
             mapping_dict = {
                 0: 0,
                 1: 0,
@@ -368,22 +275,28 @@ class TripletsDataset(Dataset):
         if self.train:
 
             idx_p = np.random.randint(self.__len__())
-            while self.dataset[idx_p][1] != self.dataset[idx][1]:
+            while self.dataset[idx_p][3] != self.dataset[idx][2]:
                 idx_p = np.random.randint(self.__len__())
 
             idx_n = np.random.randint(self.__len__())
-            while self.dataset[idx_n][1] == self.dataset[idx][1]:
+            while self.dataset[idx_n][3] == self.dataset[idx][2]:
                 idx_n = np.random.randint(self.__len__())
 
-            x_a, y_a = self.dataset[idx]
-            x_p, y_p = self.dataset[idx_p]
-            x_n, y_n = self.dataset[idx_n]
+            try:
+                x_a, y_a, side_information_a, _ = self.dataset[idx]
+                x_p, y_p, side_information_p, _ = self.dataset[idx_p]
+                x_n, y_n, side_information_n, _ = self.dataset[idx_n]
 
-            (
-                side_information_a,
-                side_information_p,
-                side_information_n,
-            ) = self._get_side_information(y_a, y_p, y_n)
+            except ValueError:
+                x_a, y_a = self.dataset[idx]
+                x_p, y_p = self.dataset[idx_p]
+                x_n, y_n = self.dataset[idx_n]
+
+                (
+                    side_information_a,
+                    side_information_p,
+                    side_information_n,
+                ) = self._get_side_information(y_a, y_p, y_n)
 
             return (
                 x_a,
@@ -397,8 +310,11 @@ class TripletsDataset(Dataset):
                 y_n,
             )
         else:
-            x_a, y_a = self.dataset[idx]
-            side_information_a = self._get_side_information(y_a)
+            try:
+                x_a, y_a, side_information_a, _ = self.dataset[idx]
+            except ValueError:
+                x_a, y_a = self.dataset[idx]
+                side_information_a = self._get_side_information(y_a)
 
             return (
                 x_a,
@@ -452,13 +368,13 @@ def get_triplet_dataset(
     dataset_obj,
     data_dir="./data/",
     batch_size=128,
-    side_inforamtion_type=None,
+    side_information_type=None,
     flatten=False,
 ):
     triplets_dataset_train = TripletsDataset(
         dataset_obj,
         data_dir=data_dir,
-        side_inforamtion_type=side_inforamtion_type,
+        side_information_type=side_information_type,
         flatten=flatten,
     )
     triplets_dataset_train.setup()
@@ -467,7 +383,7 @@ def get_triplet_dataset(
         dataset_obj,
         data_dir=data_dir,
         train=False,
-        side_inforamtion_type=side_inforamtion_type,
+        side_information_type=side_information_type,
         flatten=flatten,
     )
     triplets_dataset_test.setup()

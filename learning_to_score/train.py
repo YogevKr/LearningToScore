@@ -27,12 +27,13 @@ def train(config=None):
         dl = mnist_dataloader
 
         model = Model(
-            encoder=CNNDecoder,
-            decoder=CNNEncoder,
+            encoder=CNNEncoder,
+            decoder=CNNDecoder,
             enc_out_dim=config.enc_out_dim,
             latent_dim=config.latent_dim,
             n_clusters=config.n_clusters,
             side_info_dim=config.side_info_dim,
+            side_info_loss_type=config.side_info_loss_type,
             triplet_loss_margin=config.triplet_loss_margin,
             alpha=config.alpha,
             beta=config.beta,

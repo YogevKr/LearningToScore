@@ -176,14 +176,18 @@ class VoiceEncoder(nn.Module):
     def __init__(
         self,
     ):
-        super(Encoder, self).__init__()
+        super(VoiceEncoder, self).__init__()
 
         self.encoder = nn.Sequential(
             nn.Linear(16, 10),
             nn.ReLU(),
+            nn.Linear(10, 10),
+            nn.ReLU(),
+            nn.Linear(10, 10),
+            nn.ReLU(),
             nn.Linear(10, 20),
             nn.ReLU(),
-            nn.Linear(20, 10),
+            nn.Linear(20, 30),
             nn.ReLU(),
         )
 
@@ -194,7 +198,7 @@ class VoiceEncoder(nn.Module):
 
 class VoiceDecoder(nn.Module):
     def __init__(self, input_dim=20):
-        super(Decoder, self).__init__()
+        super(VoiceDecoder, self).__init__()
 
         self.decoder = nn.Sequential(
             nn.Linear(input_dim, 20),
@@ -202,6 +206,7 @@ class VoiceDecoder(nn.Module):
             nn.Linear(20, 10),
             nn.ReLU(),
             nn.Linear(10, 16),
+            nn.Sigmoid(),
         )
 
     def forward(self, z):
@@ -393,9 +398,9 @@ class Scorer(nn.Module):
         self.number_of_clusters = number_of_clusters
 
         self.scorer = nn.Sequential(
-            nn.Linear(latent_dim, 100),
+            nn.Linear(latent_dim, 10),
             nn.ReLU(True),
-            nn.Linear(100, 10),
+            nn.Linear(10, 10),
             nn.ReLU(True),
             nn.Linear(10, number_of_clusters),
         )
@@ -421,6 +426,7 @@ class Model(pl.LightningModule):
         latent_dim=10,
         n_clusters=10,
         side_info_dim=10,
+        side_info_loss_type="cross_entropy",
         triplet_loss_margin=1.0,
         alpha=1,
         beta=1,
@@ -436,6 +442,7 @@ class Model(pl.LightningModule):
         self.latent_dim = latent_dim
         self.n_clusters = n_clusters
         self.side_info_dim = side_info_dim
+        self.side_info_loss_type = side_info_loss_type
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
@@ -617,7 +624,7 @@ class Model(pl.LightningModule):
 
         triplet_loss_ = self.gamma * triplet_loss
 
-        if self.side_info_dim == 1:
+        if self.side_info_loss_type == "binary_cross_entropy":
             side_information_loss_a = F.binary_cross_entropy_with_logits(
                 side_information_logit_a.flatten(), side_information_a.float()
             )
@@ -627,8 +634,7 @@ class Model(pl.LightningModule):
             side_information_loss_n = F.binary_cross_entropy_with_logits(
                 side_information_logit_n.flatten(), side_information_n.float()
             )
-
-        else:
+        elif self.side_info_loss_type == "cross_entropy":
             side_information_loss_a = F.cross_entropy(
                 side_information_logit_a, side_information_a
             ).div(math.log(2))
@@ -638,6 +644,18 @@ class Model(pl.LightningModule):
             side_information_loss_n = F.cross_entropy(
                 side_information_logit_n, side_information_n
             ).div(math.log(2))
+        elif self.side_info_loss_type == "mse":
+            side_information_loss_a = F.mse_loss(
+                side_information_logit_a.flatten(), side_information_a
+            )
+            side_information_loss_p = F.mse_loss(
+                side_information_logit_p.flatten(), side_information_p
+            )
+            side_information_loss_n = F.mse_loss(
+                side_information_logit_n.flatten(), side_information_n
+            )
+        else:
+            raise ValueError
 
         side_information_loss = self.delta * (
             side_information_loss_a + side_information_loss_p + side_information_loss_n
@@ -914,6 +932,7 @@ class Model(pl.LightningModule):
                 "log_sigma2 norm": torch.linalg.norm(log_sigma2_x_a, axis=1).mean(),
                 "y_a": y_a,
                 "side_information_logit": side_information_logit,
+                "side_info_preds": side_information_logit.argmax(axis=1).detach().cpu().numpy()
             }
         )
 
@@ -922,35 +941,42 @@ class Model(pl.LightningModule):
         pprint(prediction_idx_mapping)
 
         # side_info accuracy by first
-        side_info_acc, _ = cluster_acc(
+        side_info_acc, side_info_prediction_idx = cluster_acc(
             side_information_logit.argmax(axis=1).detach().cpu().numpy(),
             side_information.detach().cpu().numpy(),
         )
+        side_info_prediction_idx_mapping = {i: j for i, j in side_info_prediction_idx}
 
 
         self.logger.experiment.log(
             {
                 "acc": acc,
                 "side_info_max_acc": side_info_acc,
+                "side_info_corrcoef": torch.corrcoef(
+                    torch.cat([
+                    torch.unsqueeze(side_information_logit.argmax(axis=1), 1), torch.unsqueeze(side_information, 1)
+                    ], axis=1).T
+                    )[1][0],
                 "error-rate": (1 - acc) * 100,
                 "q(z|x) 2d": plot(mu[:, 0], mu[:, 1], np.squeeze(y_a)),
                 "q(z|x) 2d score": plot(mu[:, 0], mu[:, 1], np.squeeze(preds)),
+                "side_info_conf_mat": wandb.plot.confusion_matrix(
+                    probs=None,
+                    y_true=side_information.detach().cpu().numpy(),
+                    preds=[
+                        side_info_prediction_idx_mapping[i] for i in side_information_logit.argmax(axis=1).detach().cpu().numpy()
+                        ],
+                ),
                 "conf_mat": wandb.plot.confusion_matrix(
                     probs=None,
                     y_true=y_a,
                     preds=[prediction_idx_mapping[i] for i in preds],
-                    class_names=list(range(self.n_clusters + 1)),
                 ),
-                # "conf_mat": wandb.plot.confusion_matrix(
-                #     probs=None,
-                #     y_true=y_a,
-                #     preds=[prediction_idx_mapping[i] for i in preds],
-                # ),
                 "results plot": plot(
                     side_information_logit.argmax(axis=1).detach().cpu().numpy(),
                     [prediction_idx_mapping[i] for i in preds],
                     c=y_a,
                 ),
-                "reconstructed": plot_sample(reconstructed_xs, y_a),
+                # "reconstructed": plot_sample(reconstructed_xs, y_a),
             }
         )
