@@ -119,18 +119,6 @@ class WaveParkinsonsDrawingsDataset(ParkinsonsDrawingsDataset):
             data_type="wave",
         )
 
-datasets_dict = {
-    "MNIST": MNIST,
-    "SVHN": SVHN,
-    "USPS": USPS,
-    "KMNIST": KMNIST,
-    "CIFAR10": CIFAR10,
-    "WaveParkinsonsDrawingsDataset": WaveParkinsonsDrawingsDataset,
-    "SpiralParkinsonsDrawingsDataset": SpiralParkinsonsDrawingsDataset,
-    "ParkinsonsVoiceDataset": ParkinsonVoiceDataset
-}
-
-
 class Normalize(object):
     """Convert ndarrays in sample to Tensors."""
 
@@ -823,3 +811,14 @@ class ParkinsonVoiceDatasetLeaky(Dataset):
         label = self.targets[idx]	
         side_info = self.side_info[idx]	
         return instance.astype(np.float32), label, side_info
+
+datasets_dict = {
+    "MNIST": MNIST,
+    "SVHN": SVHN,
+    "USPS": USPS,
+    "KMNIST": KMNIST,
+    "CIFAR10": CIFAR10,
+    "WaveParkinsonsDrawingsDataset": WaveParkinsonsDrawingsDataset,
+    "SpiralParkinsonsDrawingsDataset": SpiralParkinsonsDrawingsDataset,
+    "ParkinsonsVoiceDataset": ParkinsonVoiceDataset
+}
