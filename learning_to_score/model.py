@@ -9,6 +9,7 @@ import wandb
 from scipy.optimize import linear_sum_assignment as linear_assignment
 from torch import nn
 from torch.nn import functional as F
+from sklearn.metrics import roc_auc_score
 
 
 class LinearLayer(torch.nn.Module):
@@ -20,6 +21,74 @@ class LinearLayer(torch.nn.Module):
         out = self.linear(x)
         return out
 
+class MnistCNNEncoder(nn.Module):	
+    def __init__(	
+        self,	
+    ):	
+        super(MnistCNNEncoder, self).__init__()	
+        self.cnn = nn.Sequential(	
+            nn.Conv2d(	
+                in_channels=1,	
+                out_channels=32,	
+                kernel_size=4,	
+                stride=2,	
+            ),	
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),	
+            nn.Conv2d(	
+                in_channels=32,	
+                out_channels=64,	
+                kernel_size=4,	
+                stride=2,	
+            ),	
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),		
+        )	
+        self.linear = nn.Sequential(	
+            nn.Linear(1600, 1000),	
+            nn.ReLU(True),	
+            nn.Linear(1000, 500),	
+            nn.ReLU(True),	
+            nn.Linear(500, 100),	
+            nn.ReLU(True),	
+        )	
+    def forward(self, x):	
+        x = self.cnn(x)	
+        x = x.view(x.size(0), -1)	
+        x_encoded = self.linear(x)	
+        return x_encoded	
+
+class MnistCNNDecoder(nn.Module):	
+    def __init__(self, input_dim=20):	
+        super(MnistCNNDecoder, self).__init__()	
+        a = 128	
+        b = 2	
+        self.decoder = nn.Sequential(	
+            nn.Linear(input_dim, a * b * b),	
+            nn.Unflatten(1, (a, b, b)),	
+            nn.ConvTranspose2d(	
+                in_channels=128,	
+                out_channels=64,	
+                kernel_size=4,	
+                stride=2,	
+            ),	
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),	
+            nn.ConvTranspose2d(	
+                in_channels=64,	
+                out_channels=32,	
+                kernel_size=3,	
+                stride=2,	
+            ),	
+            nn.LeakyReLU(negative_slope=0.1, inplace=True),	
+            nn.ConvTranspose2d(	
+                in_channels=32,	
+                out_channels=1,	
+                kernel_size=4,	
+                stride=2,	
+            ),	
+            nn.Sigmoid(),	
+        )	
+    def forward(self, z):	
+        x_pro = self.decoder(z)	
+        return x_pro
 
 class CNNEncoder(nn.Module):
     def __init__(
@@ -179,15 +248,11 @@ class VoiceEncoder(nn.Module):
         super(VoiceEncoder, self).__init__()
 
         self.encoder = nn.Sequential(
-            nn.Linear(16, 10),
-            nn.ReLU(),
-            nn.Linear(10, 10),
-            nn.ReLU(),
-            nn.Linear(10, 10),
+            nn.Linear(18, 10),
             nn.ReLU(),
             nn.Linear(10, 20),
             nn.ReLU(),
-            nn.Linear(20, 30),
+            nn.Linear(20, 10),
             nn.ReLU(),
         )
 
@@ -205,7 +270,7 @@ class VoiceDecoder(nn.Module):
             nn.ReLU(),
             nn.Linear(20, 10),
             nn.ReLU(),
-            nn.Linear(10, 16),
+            nn.Linear(10, 18),
             nn.Sigmoid(),
         )
 
@@ -465,10 +530,36 @@ class Model(pl.LightningModule):
         self.jsd_triplet_loss = TripletMarginGeometricJSDLoss(
             margin=triplet_loss_margin
         )
+    
+	    def save(self, path="./model.pth", name="model"):	
+        torch.save(self.state_dict(), path)	
+        artifact = wandb.Artifact(name, type='model')	
+        artifact.add_file(path)	
+        wandb.log_artifact(artifact)	
 
-    def on_train_start(self):
-        self.hparams.update(self.trainer.datamodule.get_summery())
-        self.logger.log_hyperparams(self.hparams)
+    @staticmethod	
+    def save_latent_vectors(	
+        tensor,	
+        path="./latent_vectors.pt",	
+        name="latent_vectors",	
+        metadata=None	
+        ):	
+        	
+        torch.save(tensor, path)	
+        artifact = wandb.Artifact(	
+            name,	
+            type='latent_vectors',	
+            metadata=metadata	
+        )	
+        artifact.add_file(path)	
+        wandb.log_artifact(artifact)	
+
+    def on_train_start(self):	
+        self.hparams.update(self.trainer.datamodule.get_summery())	
+        self.logger.log_hyperparams(self.hparams)	
+
+    def training_epoch_end(self, training_step_outputs):	
+        self.save()
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-3)
@@ -661,20 +752,38 @@ class Model(pl.LightningModule):
             side_information_loss_a + side_information_loss_p + side_information_loss_n
         )
 
-        def conditinal_entropy(logit):
-            probs = F.softmax(logit, dim=1)
-            return -torch.mean(torch.sum(probs * (torch.log(probs + 1e-8)), 1))
+        def conditional_entropy(logit):
+            if self.n_clusters == 1:
+                probs_1 = torch.sigmoid(logit)
+                probs_0 = 1 - probs_1
+
+                return -torch.mean(
+                    probs_0 * (torch.log(probs_0 + 1e-8)) + probs_1 * (torch.log(probs_1 + 1e-8))
+                    )
+            else:
+                probs = F.softmax(logit, dim=1)
+                return -torch.mean(torch.sum(probs * (torch.log(probs + 1e-8)), 1))
+
 
         score_given_z_entropy = (
-            conditinal_entropy(logit_a)
-            + conditinal_entropy(logit_p)
-            + conditinal_entropy(logit_n)
+            conditional_entropy(logit_a)
+            + conditional_entropy(logit_p)
+            + conditional_entropy(logit_n)
         )
 
         def score_entropy(logit):
-            probs = F.softmax(logit, dim=1)
-            score_probs = torch.mean(probs, 0)
-            return -torch.sum(score_probs * torch.log(score_probs))
+            if self.n_clusters == 1:
+                probs_1 = torch.sigmoid(logit)
+                probs_0 = 1 - probs_1
+
+                score_probs_1 = torch.mean(probs_1, 0)
+                score_probs_0 = torch.mean(probs_0, 0)
+
+                return -((score_probs_0 * torch.log(score_probs_0))+((score_probs_1 * torch.log(score_probs_1))))
+            else:
+                probs = F.softmax(logit, dim=1)
+                score_probs = torch.mean(probs, 0)
+                return -torch.sum(score_probs * torch.log(score_probs))
 
         score_entropy = (
             score_entropy(logit_a) + score_entropy(logit_p) + score_entropy(logit_n)
@@ -815,7 +924,7 @@ class Model(pl.LightningModule):
         else: 
             pred = torch.argmax(logit_a, axis=1)
 
-        return pred
+        return pred, logit_a
 
     def validation_step(self, batch, batch_idx):
         (
@@ -834,9 +943,10 @@ class Model(pl.LightningModule):
             side_information_logit_a,
         ) = self(x_a, None, None)
 
-        pred = self.predict_step(batch, batch_idx)
+        pred, logit_a = self.predict_step(batch, batch_idx)
 
         return (
+            x_a,
             mu_x_a,
             log_sigma2_x_a,
             pred,
@@ -844,9 +954,11 @@ class Model(pl.LightningModule):
             side_information_a,
             side_information_logit_a,
             reconstructed_x_a,
+            logit_a,
         )
 
     def validation_epoch_end(self, outputs):
+        x_as = []
         mu_s = []
         log_sigma2_s = []
         preds = []
@@ -854,9 +966,11 @@ class Model(pl.LightningModule):
         side_informations = []
         side_information_logits = []
         reconstructed_xs = []
+        logit_as = []
 
         for out in outputs:
             (
+                x_a,
                 mu,
                 log_sigma2,
                 pred,
@@ -864,7 +978,9 @@ class Model(pl.LightningModule):
                 side_information,
                 side_information_logit,
                 reconstructed_x,
+                logit_a,
             ) = out
+            x_as.append(x_a)
             mu_s.append(mu)
             log_sigma2_s.append(log_sigma2)
             preds.append(pred)
@@ -872,14 +988,37 @@ class Model(pl.LightningModule):
             side_informations.append(side_information)
             side_information_logits.append(side_information_logit)
             reconstructed_xs.append(reconstructed_x)
+            logit_as.append(logit_a)
 
-        mu = torch.cat(mu_s).cpu().detach().numpy()
+        x_a = torch.cat(x_as).cpu().detach().numpy()
+        mu = torch.cat(mu_s)
         log_sigma2_x_a = torch.cat(log_sigma2_s).cpu().detach()
-        preds = torch.cat(preds).cpu().numpy()
+        preds = torch.cat(preds)
         y_a = torch.cat(y_as).cpu().numpy()
         side_information = torch.cat(side_informations)
         side_information_logit = torch.cat(side_information_logits)
         reconstructed_xs = torch.cat(reconstructed_xs).cpu().numpy()
+        logit_a = torch.cat(logit_as)
+
+        if self.n_clusters == 1:
+            probs = torch.sigmoid(logit_a)
+        else:
+            probs = F.softmax(logit_a, dim=1)
+
+        logit_a = logit_a.cpu().detach().numpy()
+
+        self.save_latent_vectors(	
+            dict(	
+                mu=mu,	
+                y_a=y_a,	
+                preds=preds	
+            ),	
+            metadata=dict(	
+                y_a=y_a,	
+                preds=preds	
+            )	
+        )	
+        mu = mu.cpu().detach().numpy()
 
         def plot_sample(images, labels):
             num_row = 2
@@ -923,7 +1062,36 @@ class Model(pl.LightningModule):
             return fig
 
         if self.n_clusters == 1:
-            preds = (preds.flatten() > 0.5).astype(int)
+            preds = (probs.flatten() > 0.5).cpu().numpy().astype(int)
+
+        if self.side_info_dim == 1:
+            side_info_probs = torch.sigmoid(side_information_logit)
+            side_info_preds = (side_information_logit.flatten() > 0.5).detach().cpu().numpy().astype(int)
+        else:
+            side_info_probs =  F.softmax(side_information_logit, dim=1)
+            side_info_preds = side_information_logit.argmax(axis=1).detach().cpu().numpy()
+
+        feature_columns = [
+            "Jitter(%)",
+            "Jitter(Abs)",
+            "Jitter:RAP",
+            "Jitter:PPQ5",
+            "Jitter:DDP",
+            "Shimmer",
+            "Shimmer(dB)",
+            "Shimmer:APQ3",
+            "Shimmer:APQ5",
+            "Shimmer:APQ11",
+            "Shimmer:DDA",
+            "NHR",
+            "HNR",
+            "RPDE",
+            "DFA",
+            "PPE",
+            "age",
+            "sex",
+        ]
+
 
         self.logger.experiment.log(
             {
@@ -932,7 +1100,16 @@ class Model(pl.LightningModule):
                 "log_sigma2 norm": torch.linalg.norm(log_sigma2_x_a, axis=1).mean(),
                 "y_a": y_a,
                 "side_information_logit": side_information_logit,
-                "side_info_preds": side_information_logit.argmax(axis=1).detach().cpu().numpy()
+                "side_info_preds": side_info_preds,
+                "mu_embeddings": wandb.Table(
+                                    data    = np.concatenate([x_a, mu, preds[:,np.newaxis], y_a[:,np.newaxis], side_info_preds[:,np.newaxis], logit_a], axis=1),
+                                    columns= (
+                                        feature_columns +
+                                        [str(c) for c in range(mu.shape[1])] + 
+                                        ["preds", "y", "side_info_preds"] + 
+                                        [f"logit_a_{i}" for i in range(logit_a.shape[1])]
+                                    )
+                                )
             }
         )
 
@@ -942,24 +1119,18 @@ class Model(pl.LightningModule):
 
         # side_info accuracy by first
         side_info_acc, side_info_prediction_idx = cluster_acc(
-            side_information_logit.argmax(axis=1).detach().cpu().numpy(),
+            side_info_preds,
             side_information.detach().cpu().numpy(),
         )
         side_info_prediction_idx_mapping = {i: j for i, j in side_info_prediction_idx}
-
-
+        
         self.logger.experiment.log(
             {
                 "acc": acc,
                 "side_info_max_acc": side_info_acc,
-                "side_info_corrcoef": torch.corrcoef(
-                    torch.cat([
-                    torch.unsqueeze(side_information_logit.argmax(axis=1), 1), torch.unsqueeze(side_information, 1)
-                    ], axis=1).T
-                    )[1][0],
                 "error-rate": (1 - acc) * 100,
                 "q(z|x) 2d": plot(mu[:, 0], mu[:, 1], np.squeeze(y_a)),
-                "q(z|x) 2d score": plot(mu[:, 0], mu[:, 1], np.squeeze(preds)),
+                "q(z|x) 2d score": plot(mu[:, 0], mu[:, 1], np.squeeze(preds.detach().cpu().numpy())),
                 "side_info_conf_mat": wandb.plot.confusion_matrix(
                     probs=None,
                     y_true=side_information.detach().cpu().numpy(),
@@ -967,16 +1138,29 @@ class Model(pl.LightningModule):
                         side_info_prediction_idx_mapping[i] for i in side_information_logit.argmax(axis=1).detach().cpu().numpy()
                         ],
                 ),
-                "conf_mat": wandb.plot.confusion_matrix(
-                    probs=None,
-                    y_true=y_a,
-                    preds=[prediction_idx_mapping[i] for i in preds],
-                ),
-                "results plot": plot(
-                    side_information_logit.argmax(axis=1).detach().cpu().numpy(),
-                    [prediction_idx_mapping[i] for i in preds],
-                    c=y_a,
-                ),
+                # "side_info_conf_mat": wandb.plot.confusion_matrix(
+                #     probs=None,
+                #     y_true=side_information.detach().cpu().numpy(),
+                #     preds=[x[0] for x in (side_information_logit.detach().cpu().numpy() >= 0.5).astype(int).tolist()],
+                #     class_names=["0", "1"]
+                # ),
+                # "conf_mat": wandb.plot.confusion_matrix(
+                #     probs=None,
+                #     y_true=y_a,
+                #     preds=[prediction_idx_mapping[i] for i in preds],
+                # ),
+                # "conf_mat": wandb.plot.confusion_matrix(
+                #     probs=None,
+                #     y_true=y_a,
+                #     preds=preds,
+                # ),
+                # "results plot": plot(
+                #     side_information_logit.argmax(axis=1).detach().cpu().numpy(),
+                #     [prediction_idx_mapping[i] for i in preds],
+                #     c=y_a,
+                # ),
                 # "reconstructed": plot_sample(reconstructed_xs, y_a),
+                # "score_roc_auc": roc_auc_score(y_a, probs),
+                # "side_info_roc_auc": roc_auc_score(side_information.detach().cpu().numpy(), side_info_probs)
             }
         )

@@ -1,4 +1,5 @@
 from datasets import get_triplet_dataset, datasets_dict
+from learning_to_score.model import VoiceDecoder, VoiceEncoder
 from model import CNNDecoder, CNNEncoder, Model
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
@@ -19,7 +20,7 @@ def train(config=None):
         mnist_dataloader = get_triplet_dataset(
             datasets_dict[config.dataset],
             ".",
-            1024, 
+            128, 
             config.side_inforamtion_type,
             flatten=config.flatten
         )
@@ -27,8 +28,8 @@ def train(config=None):
         dl = mnist_dataloader
 
         model = Model(
-            encoder=CNNEncoder,
-            decoder=CNNDecoder,
+	        encoder=VoiceEncoder,
+            decoder=VoiceDecoder,
             enc_out_dim=config.enc_out_dim,
             latent_dim=config.latent_dim,
             n_clusters=config.n_clusters,

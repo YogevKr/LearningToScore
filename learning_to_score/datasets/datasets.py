@@ -15,6 +15,9 @@ from torchvision import transforms
 from torchvision.datasets import (CIFAR10, KMNIST, MNIST, SVHN, USPS,
                                   VisionDataset)
 
+from sklearn.model_selection import train_test_split
+
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
