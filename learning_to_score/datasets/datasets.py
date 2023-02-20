@@ -211,7 +211,7 @@ class TripletsDataset(Dataset):
                 download=True,
                 transform=transforms.Compose(transformers),
             )
-        elif self.dataset_obj is ParkinsonVoiceDataset:
+        elif self.dataset_obj is ParkinsonsVoiceDataset or self.dataset_obj is ParkinsonVoiceDatasetLeaky:	
 
             self.dataset = self.dataset_obj(
                 root=self.data_dir,
@@ -260,20 +260,19 @@ class TripletsDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        if self.train:
+        if self.train:	
+            idx_p = np.random.randint(self.__len__())	
+            while self.dataset[idx_p][2] != self.dataset[idx][2]:	
+                idx_p = np.random.randint(self.__len__())	
 
-            idx_p = np.random.randint(self.__len__())
-            while self.dataset[idx_p][3] != self.dataset[idx][2]:
-                idx_p = np.random.randint(self.__len__())
+            idx_n = np.random.randint(self.__len__())	
+            while self.dataset[idx_n][2] == self.dataset[idx][2]:	
+                idx_n = np.random.randint(self.__len__())	
 
-            idx_n = np.random.randint(self.__len__())
-            while self.dataset[idx_n][3] == self.dataset[idx][2]:
-                idx_n = np.random.randint(self.__len__())
-
-            try:
-                x_a, y_a, side_information_a, _ = self.dataset[idx]
-                x_p, y_p, side_information_p, _ = self.dataset[idx_p]
-                x_n, y_n, side_information_n, _ = self.dataset[idx_n]
+            try:	
+                x_a, y_a, side_information_a = self.dataset[idx]	
+                x_p, y_p, side_information_p = self.dataset[idx_p]	
+                x_n, y_n, side_information_n = self.dataset[idx_n]
 
             except ValueError:
                 x_a, y_a = self.dataset[idx]
@@ -299,7 +298,7 @@ class TripletsDataset(Dataset):
             )
         else:
             try:
-                x_a, y_a, side_information_a, _ = self.dataset[idx]
+                x_a, y_a, side_information_a = self.dataset[idx]
             except ValueError:
                 x_a, y_a = self.dataset[idx]
                 side_information_a = self._get_side_information(y_a)
