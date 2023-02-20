@@ -15,8 +15,6 @@ from torchvision import transforms
 from torchvision.datasets import (CIFAR10, KMNIST, MNIST, SVHN, USPS,
                                   VisionDataset)
 
-from learning_to_score.datasets.parkinson_voice import ParkinsonVoiceDataset
-
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
