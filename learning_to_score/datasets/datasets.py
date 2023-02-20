@@ -639,7 +639,7 @@ class TripletsDataset(Dataset):
                 download=True,
                 transform=transforms.Compose(transformers),
             )
-        elif self.dataset_obj is ParkinsonsVoiceDataset or self.dataset_obj is ParkinsonVoiceDatasetLeaky:	
+        elif self.dataset_obj is ParkinsonVoiceDataset or self.dataset_obj is ParkinsonVoiceDatasetLeaky:	
 
             self.dataset = self.dataset_obj(
                 root=self.data_dir,
