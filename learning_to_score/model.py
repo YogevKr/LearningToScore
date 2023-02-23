@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
-import wandb
 from scipy.optimize import linear_sum_assignment as linear_assignment
 from torch import nn
 from torch.nn import functional as F
@@ -533,25 +532,7 @@ class Model(pl.LightningModule):
     
         def save(self, path="./model.pth", name="model"):	
             torch.save(self.state_dict(), path)	
-            artifact = wandb.Artifact(name, type='model')	
-            artifact.add_file(path)	
-            wandb.log_artifact(artifact)	
-
-    @staticmethod	
-    def save_latent_vectors(	
-        tensor,	
-        path="./latent_vectors.pt",	
-        name="latent_vectors",	
-        metadata=None	
-        ):	    	
-            torch.save(tensor, path)	
-            artifact = wandb.Artifact(	
-                name,	
-                type='latent_vectors',	
-                metadata=metadata	
-            )	
-            artifact.add_file(path)	
-            wandb.log_artifact(artifact)	
+	
 
     def on_train_start(self):	
         self.hparams.update(self.trainer.datamodule.get_summery())	
