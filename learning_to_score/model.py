@@ -538,9 +538,6 @@ class Model(pl.LightningModule):
         self.hparams.update(self.trainer.datamodule.get_summery())	
         self.logger.log_hyperparams(self.hparams)	
 
-    def training_epoch_end(self, training_step_outputs):	
-        self.save()
-
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-3)
 
