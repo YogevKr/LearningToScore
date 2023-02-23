@@ -1061,7 +1061,6 @@ class Model(pl.LightningModule):
 
         acc, prediction_idx = cluster_acc(preds, y_a)
         prediction_idx_mapping = {i: j for i, j in prediction_idx}
-        pprint(prediction_idx_mapping)
 
         # side_info accuracy by first
         side_info_acc, side_info_prediction_idx = cluster_acc(
