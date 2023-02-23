@@ -919,7 +919,7 @@ class Model(pl.LightningModule):
         ) = self(x_a, None, None)
 
         if self.n_clusters == 1:
-           pred = logit_a
+            pred = logit_a
         else: 
             pred = torch.argmax(logit_a, axis=1)
 
@@ -1006,17 +1006,6 @@ class Model(pl.LightningModule):
 
         logit_a = logit_a.cpu().detach().numpy()
 
-        self.save_latent_vectors(	
-            dict(	
-                mu=mu,	
-                y_a=y_a,	
-                preds=preds	
-            ),	
-            metadata=dict(	
-                y_a=y_a,	
-                preds=preds	
-            )	
-        )	
         mu = mu.cpu().detach().numpy()
 
         def plot_sample(images, labels):
@@ -1092,26 +1081,6 @@ class Model(pl.LightningModule):
         ]
 
 
-        self.logger.experiment.log(
-            {
-                "preds": preds,
-                "mu": mu,
-                "log_sigma2 norm": torch.linalg.norm(log_sigma2_x_a, axis=1).mean(),
-                "y_a": y_a,
-                "side_information_logit": side_information_logit,
-                "side_info_preds": side_info_preds,
-                "mu_embeddings": wandb.Table(
-                                    data    = np.concatenate([x_a, mu, preds[:,np.newaxis], y_a[:,np.newaxis], side_info_preds[:,np.newaxis], logit_a], axis=1),
-                                    columns= (
-                                        feature_columns +
-                                        [str(c) for c in range(mu.shape[1])] + 
-                                        ["preds", "y", "side_info_preds"] + 
-                                        [f"logit_a_{i}" for i in range(logit_a.shape[1])]
-                                    )
-                                )
-            }
-        )
-
         acc, prediction_idx = cluster_acc(preds, y_a)
         prediction_idx_mapping = {i: j for i, j in prediction_idx}
         pprint(prediction_idx_mapping)
@@ -1122,44 +1091,3 @@ class Model(pl.LightningModule):
             side_information.detach().cpu().numpy(),
         )
         side_info_prediction_idx_mapping = {i: j for i, j in side_info_prediction_idx}
-        
-        self.logger.experiment.log(
-            {
-                "acc": acc,
-                "side_info_max_acc": side_info_acc,
-                "error-rate": (1 - acc) * 100,
-                "q(z|x) 2d": plot(mu[:, 0], mu[:, 1], np.squeeze(y_a)),
-                "q(z|x) 2d score": plot(mu[:, 0], mu[:, 1], np.squeeze(preds.detach().cpu().numpy())),
-                "side_info_conf_mat": wandb.plot.confusion_matrix(
-                    probs=None,
-                    y_true=side_information.detach().cpu().numpy(),
-                    preds=[
-                        side_info_prediction_idx_mapping[i] for i in side_information_logit.argmax(axis=1).detach().cpu().numpy()
-                        ],
-                ),
-                # "side_info_conf_mat": wandb.plot.confusion_matrix(
-                #     probs=None,
-                #     y_true=side_information.detach().cpu().numpy(),
-                #     preds=[x[0] for x in (side_information_logit.detach().cpu().numpy() >= 0.5).astype(int).tolist()],
-                #     class_names=["0", "1"]
-                # ),
-                # "conf_mat": wandb.plot.confusion_matrix(
-                #     probs=None,
-                #     y_true=y_a,
-                #     preds=[prediction_idx_mapping[i] for i in preds],
-                # ),
-                # "conf_mat": wandb.plot.confusion_matrix(
-                #     probs=None,
-                #     y_true=y_a,
-                #     preds=preds,
-                # ),
-                # "results plot": plot(
-                #     side_information_logit.argmax(axis=1).detach().cpu().numpy(),
-                #     [prediction_idx_mapping[i] for i in preds],
-                #     c=y_a,
-                # ),
-                # "reconstructed": plot_sample(reconstructed_xs, y_a),
-                # "score_roc_auc": roc_auc_score(y_a, probs),
-                # "side_info_roc_auc": roc_auc_score(side_information.detach().cpu().numpy(), side_info_probs)
-            }
-        )
