@@ -1,6 +1,6 @@
 torch
 numpy
-torchmetrics
-wandb
-networkx
 pytorch_lightning
+pandas
+scikit-learn
+torchvision
