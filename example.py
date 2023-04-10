@@ -519,7 +519,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     # Train the model
-    train(model, dataloader.train_dataloader(), dataloader.val_dataloader(), optimizer, num_epochs=10)
+    train(model, dataloader.train_dataloader(), dataloader.val_dataloader(), optimizer, num_epochs=config.max_epochs)
 
 if __name__ == '__main__':
     main()
