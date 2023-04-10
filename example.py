@@ -26,7 +26,6 @@ class ParkinsonVoiceDatasetLeaky(Dataset):
         self.filename = "parkinson_updrs.csv"
 
         if download:
-            print(download)
             self.download()
 
         if not self._check_exists():
@@ -46,7 +45,6 @@ class ParkinsonVoiceDatasetLeaky(Dataset):
         df.to_csv(os.path.join(self.raw_folder, self.filename))
 
     def _check_exists(self) -> bool:
-        print(os.path.join(self.raw_folder, self.filename))
         return os.path.isfile(os.path.join(self.raw_folder, self.filename))
 
     @property
