@@ -21,7 +21,7 @@ def train(config=None):
             datasets_dict[config.dataset],
             ".",
             128, 
-            config.side_inforamtion_type,
+            config.side_information_type,
             flatten=config.flatten
         )
 
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     parser.add_argument("--latent_dim", type=int)
     parser.add_argument("--n_clusters", type=int)
     parser.add_argument("--triplet_loss_margin", type=float)
-    parser.add_argument("--side_inforamtion_type", type=str)
+    parser.add_argument("--side_information_type", type=str)
     parser.add_argument("--side_info_dim", type=int)
     parser.add_argument("--dataset", type=str)
 

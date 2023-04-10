@@ -5,7 +5,6 @@ from typing import Callable, Dict, Optional
 import numpy as np
 import pandas as pd
 import psutil
-import pytorch_lightning as pl
 import torch
 from PIL import Image, ImageFile
 from sklearn.model_selection import train_test_split
@@ -743,7 +742,7 @@ class TripletsDataset(Dataset):
         )
 
 
-class DataModule(pl.LightningDataModule):
+class DataModule():
     def __init__(
         self,
         train_dataset: Dataset,
@@ -751,7 +750,6 @@ class DataModule(pl.LightningDataModule):
         batch_size: int = 128,
         num_workers=2,
     ):
-        super().__init__()
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
         self.batch_size = batch_size

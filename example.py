@@ -15,7 +15,7 @@ class ParkinsonVoiceDatasetLeaky(Dataset):
         train: bool = True,
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None,
-        download: bool = False,
+        download: bool = True,
     ):
         super().__init__()
 
@@ -212,7 +212,7 @@ class TripletsDataset(Dataset):
             self.dataset = self.dataset_obj(
                 root=self.data_dir,
                 train=self.train,
-                download=False,
+                download=True,
             )
         else:
             raise TypeError
@@ -356,7 +356,7 @@ def train(
     train_dataloader,
     val_dataloader,
     optimizer,
-    num_epochs=10,
+    num_epochs=30,
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
 ):
 
@@ -442,175 +442,84 @@ def train(
         train_loss /= len(train_dataloader)
         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {train_loss:.4f}")
 
-        # Validation
-        model.eval()
-        with torch.no_grad():
-            val_loss = 0
-            for batch in val_dataloader:
-                (
-                    x_a,
-                    side_information_a,
-                    y_a,
-                ) = [t.to(device) for t in batch]
+        # # Validation
+        # model.eval()
+        # with torch.no_grad():
+        #     val_loss = 0
+        #     for batch in val_dataloader:
+        #         (
+        #             x_a,
+        #             side_information_a,
+        #             y_a,
+        #         ) = [t.to(device) for t in batch]
 
-                (
-                    encoded_x_a,
-                    z_a,
-                    reconstructed_x_a,
-                    mu_x_a,
-                    log_sigma2_x_a,
-                    logit_a,
-                    side_information_logit_a,
-                ) = model(x_a, None, None)
+        #         (
+        #             encoded_x_a,
+        #             z_a,
+        #             reconstructed_x_a,
+        #             mu_x_a,
+        #             log_sigma2_x_a,
+        #             logit_a,
+        #             side_information_logit_a,
+        #         ) = model(x_a, None, None)
 
-                loss = model.loss_function(
-                    x_a,
-                    None,
-                    None,
-                    reconstructed_x_a,
-                    None,
-                    None,
-                    encoded_x_a,
-                    None,
-                    None,
-                    z_a,
-                    None,
-                    None,
-                    mu_x_a,
-                    None,
-                    None,
-                    log_sigma2_x_a,
-                    None,
-                    None,
-                    logit_a,
-                    None,
-                    None,
-                    side_information_logit_a,
-                    None,
-                    None,
-                    side_information_a,
-                    None,
-                    None,
-                )
+        #     val_loss /= len(val_dataloader)
+        #     print(f"Validation Loss: {val_loss:.4f}")
 
-                val_loss += loss.item()
-
-            val_loss /= len(val_dataloader)
-            print(f"Validation Loss: {val_loss:.4f}")
+def main():
+    config_dict = {
+        "alpha": 10,
+        "beta": 0.01,
+        "gamma": 10,
+        "delta": 10,
+        "zeta": 1,
+        "eta": 0.4,
+        "latent_dim": 25,
+        "enc_out_dim": 10,
+        "max_epochs": 100,
+        "n_clusters": 1,
+        "triplet_loss_margin": 1.0,
+        "flatten": False,
+        "side_information_type": "pure",
+        "side_info_dim": 1,
+        "dataset": "ParkinsonVoiceDatasetLeaky",  # ParkinsonsVoiceDataset / MNIST / SVHN / USPS / KMNIST / CIFAR10 / WaveParkinsonsDrawingsDataset / SpiralParkinsonsDrawingsDataset / ParkinsonsVoiceDataset
+        "side_info_loss_type": "binary_cross_entropy",  # "cross_entropy"
+    }
+    config = AttrDict(config_dict)
 
 
-# Create the model
-model = Model(
-    encoder=VoiceEncoder,
-    decoder=VoiceDecoder,
-    enc_out_dim=100,
-    latent_dim=10,
-    n_clusters=10,
-    side_info_dim=10,
-    side_info_loss_type="cross_entropy",
-    triplet_loss_margin=1.0,
-    alpha=1,
-    beta=1,
-    gamma=1,
-    delta=1,
-    zeta=1,
-    eta=0.5,
-)
-
-config_dict = {
-    "alpha": 10,
-    "beta": 0.01,
-    "gamma": 10,
-    "delta": 10,
-    "zeta": 1,
-    "eta": 0.4,
-    "latent_dim": 25,
-    "enc_out_dim": 10,
-    "max_epochs": 100,
-    "n_clusters": 1,
-    "triplet_loss_margin": 1.0,
-    "flatten": False,
-    "side_inforamtion_type": "pure",
-    "side_info_dim": 1,
-    "dataset": "ParkinsonVoiceDatasetLeaky",  # ParkinsonsVoiceDataset / MNIST / SVHN / USPS / KMNIST / CIFAR10 / WaveParkinsonsDrawingsDataset / SpiralParkinsonsDrawingsDataset / ParkinsonsVoiceDataset
-    "side_info_loss_type": "binary_cross_entropy",  # "cross_entropy"
-}
-config = AttrDict(config_dict)
-
-dataloader = get_triplet_dataset(
-        ParkinsonVoiceDatasetLeaky,
-        ".",
-        128,
-        config.side_inforamtion_type,
-        flatten=config.flatten,
+    # Create the model
+    model = Model(
+        encoder=VoiceEncoder,
+        decoder=VoiceDecoder,
+        enc_out_dim=config.enc_out_dim,
+        latent_dim=config.latent_dim,
+        n_clusters=config.n_clusters,
+        side_info_dim=config.side_info_dim,
+        side_info_loss_type=config.side_info_loss_type,
+        triplet_loss_margin=config.triplet_loss_margin,
+        alpha=config.alpha,
+        beta=config.beta,
+        gamma=config.gamma,
+        delta=config.delta,
+        zeta=config.zeta,
+        eta=config.eta,
     )
 
-# Create the optimizer
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-# Train the model
-train(model, dataloader.train_dataloader(), dataloader.val_dataloader(), optimizer, num_epochs=10)
+    dataloader = get_triplet_dataset(
+            ParkinsonVoiceDatasetLeaky,
+            ".",
+            128,
+            config.side_information_type,
+            flatten=config.flatten,
+        )
 
-# def train(config=None):
-#     pl.seed_everything(1234)
-#     config = AttrDict(config)
+    # Create the optimizer
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-#     mnist_dataloader = get_triplet_dataset(
-#         ParkinsonVoiceDatasetLeaky,
-#         ".",
-#         128,
-#         config.side_inforamtion_type,
-#         flatten=config.flatten,
-#     )
+    # Train the model
+    train(model, dataloader.train_dataloader(), dataloader.val_dataloader(), optimizer, num_epochs=10)
 
-#     dl = mnist_dataloader
-
-#     model = Model(
-#         encoder=VoiceEncoder,
-#         decoder=VoiceDecoder,
-#         enc_out_dim=config.enc_out_dim,
-#         latent_dim=config.latent_dim,
-#         n_clusters=config.n_clusters,
-#         side_info_dim=config.side_info_dim,
-#         side_info_loss_type=config.side_info_loss_type,
-#         triplet_loss_margin=config.triplet_loss_margin,
-#         alpha=config.alpha,
-#         beta=config.beta,
-#         gamma=config.gamma,
-#         delta=config.delta,
-#         zeta=config.zeta,
-#         eta=config.eta,
-#     )
-
-#     trainer = pl.Trainer(
-#         max_epochs=config.max_epochs,
-#         # accelerator='gpu',
-#         # devices=1,
-#         detect_anomaly=True,
-#         log_every_n_steps=1,
-#         num_sanity_val_steps=0,
-#     )
-
-#     trainer.fit(model, dl)
-
-
-# config_dict = {
-#     "alpha": 10,
-#     "beta": 0.01,
-#     "gamma": 10,
-#     "delta": 10,
-#     "zeta": 1,
-#     "eta": 0.4,
-#     "latent_dim": 25,
-#     "enc_out_dim": 10,
-#     "max_epochs": 100,
-#     "n_clusters": 1,
-#     "triplet_loss_margin": 1.0,
-#     "flatten": False,
-#     "side_inforamtion_type": "pure",
-#     "side_info_dim": 1,
-#     "dataset": "ParkinsonVoiceDatasetLeaky",  # ParkinsonsVoiceDataset / MNIST / SVHN / USPS / KMNIST / CIFAR10 / WaveParkinsonsDrawingsDataset / SpiralParkinsonsDrawingsDataset / ParkinsonsVoiceDataset
-#     "side_info_loss_type": "binary_cross_entropy",  # "cross_entropy"
-# }
-
-# train(config_dict)
+if __name__ == '__main__':
+    main()

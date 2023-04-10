@@ -3,7 +3,6 @@ from pprint import pprint
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pytorch_lightning as pl
 import torch
 from scipy.optimize import linear_sum_assignment as linear_assignment
 from torch import nn
@@ -481,7 +480,7 @@ except ImportError:
 
 Data_type = Literal["mnist", "generated"]
 
-class Model(pl.LightningModule):
+class Model(nn.Module):
     def __init__(
         self,
         encoder: nn.Module,
@@ -501,7 +500,6 @@ class Model(pl.LightningModule):
     ):
         super().__init__()
 
-        self.save_hyperparameters()
         self.enc_out_dim = enc_out_dim
         self.latent_dim = latent_dim
         self.n_clusters = n_clusters
@@ -533,10 +531,6 @@ class Model(pl.LightningModule):
         def save(self, path="./model.pth", name="model"):	
             torch.save(self.state_dict(), path)	
 	
-
-    def on_train_start(self):	
-        self.hparams.update(self.trainer.datamodule.get_summery())	
-        self.logger.log_hyperparams(self.hparams)	
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-3)
@@ -786,23 +780,6 @@ class Model(pl.LightningModule):
             negative_metric_distance = (
                 (mu_x_a - mu_x_n + self.eps).pow(2).sum(1).sqrt().mean()
             )
-
-        self.log_dict(
-            {
-                "loss": loss,
-                "recon_loss": reconstruction_loss.mean(),
-                "triplet_loss": triplet_loss,
-                "kl_loss": kl_loss,
-                "positive_example_distance_jsd": positive_example_distance,
-                "negative_example_distance_jsd": negative_example_distance,
-                "positive_metric_distance": positive_metric_distance,
-                "negative_metric_distance": negative_metric_distance,
-                "side_information_loss": side_information_loss,
-                "mutual_info": mutual_info,
-                "score_entropy": score_entropy,
-                "score_given_z_entropy": score_given_z_entropy,
-            }
-        )
 
         return loss
 
